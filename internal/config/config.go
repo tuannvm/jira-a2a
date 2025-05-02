@@ -32,10 +32,22 @@ type Config struct {
 
 // init loads environment variables from .env file
 func init() {
-	// Load .env file if it exists
+	// Try to load from project root first
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("No .env file found or error loading it. Using environment variables or defaults.")
+		// Try loading from parent directory (assuming we're in a subdirectory)
+		err = godotenv.Load("../.env")
+		if err != nil {
+			// Try one more level up
+			err = godotenv.Load("../../.env")
+			if err != nil {
+				log.Println("No .env file found or error loading it. Using environment variables or defaults.")
+			} else {
+				log.Println("Loaded configuration from ../../.env file")
+			}
+		} else {
+			log.Println("Loaded configuration from ../.env file")
+		}
 	} else {
 		log.Println("Loaded configuration from .env file")
 	}
@@ -44,7 +56,7 @@ func init() {
 // NewConfig creates a new configuration with values from environment variables
 func NewConfig() *Config {
 	port, _ := strconv.Atoi(getEnvOrDefault("SERVER_PORT", "8080"))
-	
+
 	return &Config{
 		// Server configuration
 		ServerPort: port,

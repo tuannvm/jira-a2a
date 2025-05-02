@@ -9,53 +9,48 @@ import (
 
 	"github.com/tuannvm/jira-a2a/internal/config"
 	"github.com/tuannvm/jira-a2a/internal/jira"
-	"github.com/tuannvm/jira-a2a/pkg/models"
+	"github.com/tuannvm/jira-a2a/internal/models"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 )
 
-// TaskProcessor is the interface that must be implemented by all agents
-type TaskProcessor interface {
-	Process(ctx context.Context, taskData []byte, handle TaskHandle) error
-}
-
-// TaskHandle is the interface for updating task status and recording artifacts
-type TaskHandle interface {
-	UpdateStatus(status string) error
-	RecordArtifact(name, url string) error
-	Complete(result []byte) error
-}
-
-// InformationGatheringAgent implements the TaskProcessor interface
+// InformationGatheringAgent implements the TaskProcessor interface from trpc-a2a-go
 type InformationGatheringAgent struct {
-	config    *config.Config
+	config     *config.Config
 	jiraClient *jira.Client
 }
 
 // NewInformationGatheringAgent creates a new InformationGatheringAgent
 func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent {
 	return &InformationGatheringAgent{
-		config:    cfg,
+		config:     cfg,
 		jiraClient: jira.NewClient(cfg),
 	}
 }
 
-// Process implements the TaskProcessor interface
-func (a *InformationGatheringAgent) Process(ctx context.Context, taskData []byte, handle TaskHandle) error {
+// Helper function to create string pointers
+func stringPtr(s string) *string {
+	return &s
+}
+
+// Process implements the TaskProcessor interface from trpc-a2a-go
+func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, message protocol.Message, handle taskmanager.TaskHandle) error {
 	// Update status to processing
-	if err := handle.UpdateStatus("processing"); err != nil {
+	if err := handle.UpdateStatus(protocol.TaskState("processing"), nil); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Parse the task data
+	// Extract the task data from message
 	var task models.TicketAvailableTask
-	if err := json.Unmarshal(taskData, &task); err != nil {
-		return fmt.Errorf("failed to unmarshal task data: %w", err)
+	if err := a.extractTaskData(message, &task); err != nil {
+		return fmt.Errorf("failed to extract task data: %w", err)
 	}
 
 	// Log the task
 	log.Printf("Processing ticket-available task for ticket %s: %s", task.TicketID, task.Summary)
 
 	// Update status to fetching ticket details
-	if err := handle.UpdateStatus("fetching ticket details"); err != nil {
+	if err := handle.UpdateStatus(protocol.TaskState("fetching_ticket_details"), nil); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -66,7 +61,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskData []byte
 	}
 
 	// Update status to analyzing ticket
-	if err := handle.UpdateStatus("analyzing ticket"); err != nil {
+	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), nil); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -74,7 +69,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskData []byte
 	missingFields, collectedFields := a.analyzeTicket(ticket)
 
 	// Update status to posting comment
-	if err := handle.UpdateStatus("posting comment"); err != nil {
+	if err := handle.UpdateStatus(protocol.TaskState("posting_comment"), nil); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -85,26 +80,122 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskData []byte
 		return fmt.Errorf("failed to post comment: %w", err)
 	}
 
-	// Record the comment URL as an artifact
-	if err := handle.RecordArtifact("comment", jiraComment.URL); err != nil {
+	// Record the comment URL as an artifact - use metadata instead of URL
+	artifact := protocol.Artifact{
+		Name:        stringPtr("comment"),
+		Description: stringPtr("Jira Comment"),
+		Parts:       []protocol.Part{},
+		Metadata: map[string]interface{}{
+			"url": jiraComment.URL,
+		},
+	}
+	if err := handle.AddArtifact(artifact); err != nil {
 		return fmt.Errorf("failed to record artifact: %w", err)
 	}
 
-	// Create the info-gathered task
+	// Create the info-gathered result
 	infoGatheredTask := models.InfoGatheredTask{
 		TicketID:        task.TicketID,
 		CollectedFields: collectedFields,
 		CommentURL:      jiraComment.URL,
 	}
 
-	// Marshal the info-gathered task
-	result, err := json.Marshal(infoGatheredTask)
+	// Marshal the result to JSON for the response
+	resultJSON, err := json.Marshal(infoGatheredTask)
 	if err != nil {
 		return fmt.Errorf("failed to marshal info-gathered task: %w", err)
 	}
 
-	// Complete the task
-	return handle.Complete(result)
+	// Create the response message with the info-gathered result
+	textPart := protocol.NewTextPart(string(resultJSON))
+	responseMsg := &protocol.Message{
+		Parts: []protocol.Part{textPart},
+	}
+
+	// Complete the task with the response
+	if err := handle.UpdateStatus(protocol.TaskState("completed"), responseMsg); err != nil {
+		return fmt.Errorf("failed to complete task: %w", err)
+	}
+
+	return nil
+}
+
+// extractTaskData extracts task data from the message parts
+func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, task *models.TicketAvailableTask) error {
+	// Debug: print the message parts
+	log.Printf("Message has %d parts", len(message.Parts))
+
+	// First approach: Check for TextPart
+	for _, part := range message.Parts {
+		if textPart, ok := part.(*protocol.TextPart); ok && textPart != nil && textPart.Text != "" {
+			log.Printf("Found TextPart: %s", textPart.Text)
+
+			// Try to unmarshal directly
+			if err := json.Unmarshal([]byte(textPart.Text), task); err == nil {
+				log.Printf("Successfully parsed task from TextPart")
+				return nil
+			}
+
+			// If direct unmarshaling fails, look for JSON wrapper
+			var wrapper map[string]interface{}
+			if err := json.Unmarshal([]byte(textPart.Text), &wrapper); err == nil {
+				// Try to find a field that could contain our task data
+				for _, v := range wrapper {
+					if subJson, ok := v.(string); ok {
+						if err := json.Unmarshal([]byte(subJson), task); err == nil {
+							log.Printf("Successfully parsed task from nested JSON")
+							return nil
+						}
+					} else if subMap, ok := v.(map[string]interface{}); ok {
+						// Try to extract ticket ID and summary
+						if ticketID, ok := subMap["ticketId"].(string); ok {
+							task.TicketID = ticketID
+
+							if summary, ok := subMap["summary"].(string); ok {
+								task.Summary = summary
+
+								if metadata, ok := subMap["metadata"].(map[string]interface{}); ok {
+									task.Metadata = make(map[string]string)
+									for k, v := range metadata {
+										if strVal, ok := v.(string); ok {
+											task.Metadata[k] = strVal
+										}
+									}
+								}
+
+								log.Printf("Successfully extracted ticket data: %s - %s", task.TicketID, task.Summary)
+								return nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Direct approach: if there's only one text part and it contains ticketId and summary
+	if len(message.Parts) == 1 {
+		partJSON, _ := json.Marshal(message.Parts[0])
+		log.Printf("Examining single part: %s", string(partJSON))
+
+		// Try direct extraction
+		var wrapper map[string]interface{}
+		if err := json.Unmarshal(partJSON, &wrapper); err == nil {
+			if ticketID, ok := wrapper["ticketId"].(string); ok {
+				task.TicketID = ticketID
+
+				if summary, ok := wrapper["summary"].(string); ok {
+					task.Summary = summary
+
+					log.Printf("Successfully extracted ticket data from part: %s - %s", task.TicketID, task.Summary)
+					return nil
+				}
+			}
+		}
+	}
+
+	// If we get here, no valid task data was found
+	return fmt.Errorf("no valid ticket-available task data found in message")
 }
 
 // analyzeTicket analyzes a ticket for missing fields and collects available fields

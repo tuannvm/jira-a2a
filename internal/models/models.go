@@ -27,8 +27,8 @@ type JiraTicket struct {
 
 // JiraLink represents a link between Jira tickets
 type JiraLink struct {
-	Type        string `json:"type"`
-	InwardIssue string `json:"inwardIssue,omitempty"`
+	Type         string `json:"type"`
+	InwardIssue  string `json:"inwardIssue,omitempty"`
 	OutwardIssue string `json:"outwardIssue,omitempty"`
 }
 
