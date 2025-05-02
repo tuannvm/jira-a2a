@@ -17,14 +17,15 @@ import (
 // InformationGatheringAgent implements the TaskProcessor interface from trpc-a2a-go
 type InformationGatheringAgent struct {
 	config     *config.Config
-	jiraClient *jira.Client
+	jiraClient jira.JiraClientInterface
 }
 
 // NewInformationGatheringAgent creates a new InformationGatheringAgent
 func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent {
+	// Use the new go-atlassian client by default
 	return &InformationGatheringAgent{
 		config:     cfg,
-		jiraClient: jira.NewClient(cfg),
+		jiraClient: jira.NewAtlassianClient(cfg),
 	}
 }
 
