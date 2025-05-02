@@ -103,14 +103,20 @@ func main() {
 		}
 
 		// Send the task
+		log.Printf("Sending task to %s", cfg.AgentURL)
+		log.Printf("Task data: %+v", taskData)
+		log.Printf("JSON payload: %s", string(taskJSON))
+		
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		taskParams := protocol.SendTaskParams{
 			Message: message,
 		}
-
-		log.Printf("Sending task to %s", cfg.AgentURL)
+		
+		// Log message details
+		messageJSON, _ := json.Marshal(message)
+		log.Printf("Sending message: %s", string(messageJSON))
 		resp, err := a2aClient.SendTasks(ctx, taskParams)
 		if err != nil {
 			if tc.expectOK {
