@@ -1,4 +1,4 @@
-.PHONY: build test clean run run-dev release-snapshot run-docker docker-compose-up docker-compose-down lint
+.PHONY: build test clean run run-dev release-snapshot run-docker docker-compose-up docker-compose-down lint server client run-client
 
 # Variables
 BINARY_NAME=jira-a2a
@@ -9,15 +9,15 @@ CLIENT_CMD=cmd/test_a2a
 SERVER_BINARY=$(BUILD_DIR)/infogathering
 CLIENT_BINARY=$(BUILD_DIR)/test_a2a
 
-# Build the application
+# Build both server and client
 build: server client
 
-# Build the server
+# Build the server binary
 server:
 	mkdir -p $(BUILD_DIR)
 	go build -ldflags "-X main.Version=$(VERSION)" -o $(SERVER_BINARY) ./$(SERVER_CMD)
 
-# Build the client
+# Build the client binary
 client:
 	mkdir -p $(BUILD_DIR)
 	go build -ldflags "-X main.Version=$(VERSION)" -o $(CLIENT_BINARY) ./$(CLIENT_CMD)
@@ -59,7 +59,7 @@ docker-compose-up:
 docker-compose-down:
 	docker-compose down
 
-# Run linting checks (same as CI)
+# Run linting checks
 lint:
 	@echo "Running linters..."
 	@go mod tidy
@@ -67,5 +67,5 @@ lint:
 	@if ! command -v golangci-lint &> /dev/null; then echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; fi
 	@golangci-lint run --timeout=5m
 
-# Default target
+# Default target - clean and build
 all: clean build
