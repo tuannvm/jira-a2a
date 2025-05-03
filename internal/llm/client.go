@@ -20,14 +20,14 @@ type LLMClient interface {
 
 // Client implements the LLMClient interface using langchain-go
 type Client struct {
-	llm       llms.LLM
+	llm       llms.Model
 	maxTokens int
 	timeout   time.Duration
 }
 
 // NewClient creates a new LLM client based on the provided configuration
 func NewClient(cfg *config.Config) (LLMClient, error) {
-	var llmModel llms.LLM
+	var llmModel llms.Model
 	var err error
 
 	// Select LLM provider based on configuration
@@ -66,22 +66,21 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 		return "", errors.New("LLM client not initialized")
 	}
 
-	// Create a context with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
 	// Log the prompt for debugging
 	log.Printf("Sending prompt to LLM: %s", truncateForLogging(prompt))
 
-	// Call the LLM for completion
-	completion, err := c.llm.Call(timeoutCtx, prompt, llms.WithMaxTokens(c.maxTokens))
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	// Call the LLM with the non-deprecated method
+	completion, err := llms.GenerateFromSinglePrompt(ctx, c.llm, prompt, llms.WithMaxTokens(c.maxTokens))
 	if err != nil {
-		log.Printf("LLM call failed: %v", err)
-		return "", fmt.Errorf("LLM call failed: %w", err)
+		return "", fmt.Errorf("LLM generation failed: %w", err)
 	}
 
 	// Log the response for debugging
-	log.Printf("Received LLM response: %s", truncateForLogging(completion))
+	log.Printf("Received response from LLM: %s", truncateForLogging(completion))
 
 	return completion, nil
 }

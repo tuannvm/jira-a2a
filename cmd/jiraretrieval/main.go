@@ -37,9 +37,9 @@ func main() {
 	// Create a new configuration
 	cfg := config.NewConfig()
 	
-	// Override agent name and port for JiraRetrievalAgent
+	// Override agent name for JiraRetrievalAgent
 	cfg.AgentName = "JiraRetrievalAgent"
-	cfg.ServerPort = 8081 // Use a different port than InformationGatheringAgent
+	// Note: ServerPort is already set from environment variable SERVER_PORT
 	cfg.AgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, cfg.ServerPort)
 
 	// Create a new JiraRetrievalAgent
