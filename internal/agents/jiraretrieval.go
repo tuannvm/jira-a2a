@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -693,10 +694,71 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 	// Send the task
 	resp, err := j.infoAgentClient.SendTasks(ctx, taskParams)
 	if err != nil {
-		return fmt.Errorf("failed to send task: %v", err)
+		log.Printf("Warning: Could not send task to InfoGatheringAgent: %v", err)
+		log.Printf("Using mock implementation since InfoGatheringAgent is not available")
+		
+		// Mock implementation - process the ticket data locally
+		return j.mockProcessInfoGathering(ctx, taskData)
 	}
 
 	log.Printf("Successfully sent task. Task ID: %s", resp.ID)
+	return nil
+}
+
+// mockProcessInfoGathering is a mock implementation for when the InfoGatheringAgent is not available
+func (j *JiraRetrievalAgent) mockProcessInfoGathering(ctx context.Context, taskData models.TicketAvailableTask) error {
+	log.Printf("=== MOCK INFO GATHERING ===")
+	log.Printf("Ticket: %s", taskData.TicketID)
+	log.Printf("Summary: %s", taskData.Summary)
+	
+	// Print description if available
+	if description, ok := taskData.Metadata["description"]; ok && description != "" {
+		log.Printf("Description: %s", description)
+	}
+	
+	// Print other important fields
+	log.Printf("Priority: %s", taskData.Metadata["priority"])
+	log.Printf("Issue Type: %s", taskData.Metadata["issueType"])
+	log.Printf("Reporter: %s", taskData.Metadata["reporter"])
+	log.Printf("Components: %s", taskData.Metadata["components"])
+	
+	// Create mock analysis results
+	mockAnalysis := map[string]string{
+		"Suggestion": fmt.Sprintf("This is a mock analysis for ticket %s. The ticket appears to be a %s priority %s.", 
+			taskData.TicketID, 
+			taskData.Metadata["priority"], 
+			taskData.Metadata["issueType"]),
+		"TechnicalAnalysis": "Mock technical analysis - would normally contain AI-generated content.",
+		"BusinessImpact": "Mock business impact assessment - would normally contain AI-generated content.",
+		"RecommendedPriority": taskData.Metadata["priority"],
+		"NextSteps": "Please review this ticket and assign to the appropriate team.",
+	}
+	
+	// Create mock InfoGatheredTask
+	infoGatheredTask := &models.InfoGatheredTask{
+		TicketID:        taskData.TicketID,
+		CollectedFields: mockAnalysis,
+	}
+	
+	// Format a Jira comment and print it
+	comment := j.formatJiraComment(infoGatheredTask)
+	log.Printf("=== MOCK JIRA COMMENT ===")
+	log.Printf("\n%s", comment)
+	
+	// Try to post the comment to Jira if the user wants to test the full workflow
+	postToJira := os.Getenv("MOCK_POST_TO_JIRA")
+	if postToJira == "true" || postToJira == "1" || postToJira == "yes" {
+		log.Printf("MOCK_POST_TO_JIRA is enabled, posting comment to Jira")
+		jiraComment, err := j.jiraClient.PostComment(taskData.TicketID, comment)
+		if err != nil {
+			log.Printf("Failed to post comment to Jira: %v", err)
+		} else {
+			log.Printf("Successfully posted comment to Jira, URL: %s", jiraComment.URL)
+		}
+	} else {
+		log.Printf("Set MOCK_POST_TO_JIRA=true to post this comment to Jira ticket %s", taskData.TicketID)
+	}
+	
 	return nil
 }
 

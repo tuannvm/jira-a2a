@@ -41,6 +41,3 @@ temp/
 .DS_Store
 
 # Build binaries specific to this project
-infogathering
-test_a2a
-jira-a2a
