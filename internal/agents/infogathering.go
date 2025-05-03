@@ -3,11 +3,13 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 
 	"github.com/tuannvm/jira-a2a/internal/config"
+	"github.com/tuannvm/jira-a2a/internal/llm"
 	"github.com/tuannvm/jira-a2a/internal/models"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
@@ -17,13 +19,29 @@ import (
 // InformationGatheringAgent implements the TaskProcessor interface from trpc-a2a-go
 // It focuses on analyzing ticket information and generating summaries
 type InformationGatheringAgent struct {
-	config *config.Config
+	config   *config.Config
+	llmClient llm.LLMClient
 }
 
 // NewInformationGatheringAgent creates a new InformationGatheringAgent
 func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent {
+	var llmClient llm.LLMClient
+	
+	// Initialize LLM client if enabled
+	if cfg.LLMEnabled {
+		var err error
+		llmClient, err = llm.NewClient(cfg)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize LLM client: %v", err)
+			log.Printf("Falling back to basic analysis without LLM")
+		}
+	} else {
+		log.Printf("LLM is disabled in config, using basic analysis")
+	}
+	
 	return &InformationGatheringAgent{
-		config: cfg,
+		config:   cfg,
+		llmClient: llmClient,
 	}
 }
 
@@ -89,11 +107,32 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	infoGatheredTask := models.InfoGatheredTask{
 		TicketID: task.TicketID,
 		CollectedFields: map[string]string{
-			"Summary":    task.Summary,
-			"Analysis":   "Completed",
-			"Suggestion": analysis.Suggestion,
+			"Summary":          task.Summary,
+			"Analysis":         "Completed",
+			"Suggestion":       analysis.Suggestion,
+			"RiskLevel":        analysis.RiskLevel,
+			"Priority":         analysis.Priority,
+			"KeyThemes":        strings.Join(analysis.KeyThemes, ", "),
+			"Requirements":     strings.Join(analysis.Requirements, ", "),
+			"LLMGenerated":     fmt.Sprintf("%v", analysis.LLMUsed),
+			"TechnicalAnalysis": analysis.TechnicalAnalysis,
+			"BusinessImpact":   analysis.BusinessImpact,
+			"NextSteps":        analysis.NextSteps,
 		},
 		CommentURL: fmt.Sprintf("https://jira.example.com/browse/%s", task.TicketID), // Placeholder URL, JiraRetrievalAgent will handle actual Jira integration
+	}
+	
+	// Add recommended fields if available
+	if analysis.RecommendedPriority != "" {
+		infoGatheredTask.CollectedFields["RecommendedPriority"] = analysis.RecommendedPriority
+	}
+	
+	if len(analysis.RecommendedComponents) > 0 {
+		infoGatheredTask.CollectedFields["RecommendedComponents"] = strings.Join(analysis.RecommendedComponents, ", ")
+	}
+	
+	if len(analysis.RecommendedLabels) > 0 {
+		infoGatheredTask.CollectedFields["RecommendedLabels"] = strings.Join(analysis.RecommendedLabels, ", ")
 	}
 
 	// Marshal the result to JSON for the response
@@ -174,19 +213,276 @@ func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, ta
 
 // AnalysisResult represents the analysis of a ticket
 type AnalysisResult struct {
-	KeyThemes    []string
-	RiskLevel    string
-	Priority     string
-	Suggestion   string
-	Requirements []string
+	KeyThemes        []string
+	RiskLevel        string
+	Priority         string
+	Suggestion       string
+	Requirements     []string
+	LLMUsed          bool
+	Confidence       float64
+	TechnicalAnalysis string
+	BusinessImpact   string
+	NextSteps        string
+	RecommendedPriority string
+	RecommendedComponents []string
+	RecommendedLabels []string
 }
 
 // analyzeTicketInfo analyzes the ticket information and produces insights
 // This would normally integrate with an LLM for deeper analysis
 func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailableTask) *AnalysisResult {
-	// In a real implementation, this would use LLM to analyze the ticket
-	// For now, we'll do some basic analysis based on the summary and metadata
+	// Try LLM analysis first if available
+	if a.llmClient != nil {
+		llmResult, err := a.analyzeWithLLM(task)
+		if err == nil {
+			log.Printf("Successfully analyzed ticket with LLM")
+			return llmResult
+		}
+		
+		log.Printf("LLM analysis failed: %v, falling back to basic analysis", err)
+	}
 	
+	// Fallback to basic analysis if LLM is not available or fails
+	return a.performBasicAnalysis(task)
+}
+
+// analyzeWithLLM performs analysis using the LLM
+func (a *InformationGatheringAgent) analyzeWithLLM(task *models.TicketAvailableTask) (*AnalysisResult, error) {
+	// Create a prompt for the LLM
+	prompt := a.createLLMPrompt(task)
+	
+	// Call the LLM for completion
+	response, err := a.llmClient.Complete(context.Background(), prompt)
+	if err != nil {
+		return nil, fmt.Errorf("LLM completion failed: %w", err)
+	}
+	
+	// Parse the LLM response
+	result, err := a.parseLLMResponse(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+	
+	// Mark as LLM-generated
+	result.LLMUsed = true
+	
+	return result, nil
+}
+
+// createLLMPrompt creates a prompt for the LLM based on the ticket information
+func (a *InformationGatheringAgent) createLLMPrompt(task *models.TicketAvailableTask) string {
+	// Build a structured prompt for the LLM
+	prompt := fmt.Sprintf(`You are an expert in analyzing Jira tickets and providing insights. 
+Please analyze the following Jira ticket information:
+
+Ticket ID: %s
+Summary: %s
+`, task.TicketID, task.Summary)
+
+	// Add description if available
+	if description, ok := task.Metadata["description"]; ok && description != "" {
+		prompt += fmt.Sprintf("Description: %s\n", description)
+	}
+
+	// Add other metadata if available
+	metadataFields := []string{"priority", "issueType", "reporter", "components", "projectKey"}
+	for _, field := range metadataFields {
+		if value, ok := task.Metadata[field]; ok && value != "" {
+			prompt += fmt.Sprintf("%s: %s\n", capitalize(field), value)
+		}
+	}
+
+	// Add any changes if present
+	changesFound := false
+	for key, value := range task.Metadata {
+		if strings.HasPrefix(key, "change_") {
+			if !changesFound {
+				prompt += "\nRecent Changes:\n"
+				changesFound = true
+			}
+			fieldName := strings.TrimPrefix(key, "change_")
+			prompt += fmt.Sprintf("- %s: %s\n", capitalize(fieldName), value)
+		}
+	}
+
+	// Add instructions for the response format
+	prompt += `
+Please provide a comprehensive analysis in JSON format with the following fields:
+{
+  "keyThemes": ["theme1", "theme2", ...],
+  "riskLevel": "high|medium|low",
+  "priority": "high|medium|low",
+  "suggestion": "Your main suggestion for handling this ticket",
+  "requirements": ["requirement1", "requirement2", ...],
+  "technicalAnalysis": "Detailed technical analysis of the issue",
+  "businessImpact": "Impact on business operations",
+  "nextSteps": "Recommended next steps for handling this ticket",
+  "recommendedPriority": "high|medium|low",
+  "recommendedComponents": ["component1", "component2", ...],
+  "recommendedLabels": ["label1", "label2", ...]
+}
+
+Ensure your analysis is concise but comprehensive, covering both technical and business aspects.
+`
+
+	return prompt
+}
+
+// parseLLMResponse parses the LLM response and extracts structured information
+func (a *InformationGatheringAgent) parseLLMResponse(response string) (*AnalysisResult, error) {
+	// Try to extract JSON from the response
+	jsonStr, err := extractJSON(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract JSON from response: %w", err)
+	}
+	
+	// Parse the JSON into a map
+	var jsonResponse map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &jsonResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+	
+	// Create a new AnalysisResult
+	result := &AnalysisResult{
+		LLMUsed:    true,
+		Confidence: 0.9, // Default confidence for LLM responses
+	}
+	
+	// Extract key themes
+	if themes, ok := jsonResponse["keyThemes"].([]interface{}); ok {
+		for _, theme := range themes {
+			if themeStr, ok := theme.(string); ok {
+				result.KeyThemes = append(result.KeyThemes, themeStr)
+			}
+		}
+	}
+	
+	// Extract risk level
+	if riskLevel, ok := jsonResponse["riskLevel"].(string); ok {
+		result.RiskLevel = normalizeRiskLevel(riskLevel)
+	}
+	
+	// Extract priority
+	if priority, ok := jsonResponse["priority"].(string); ok {
+		result.Priority = normalizePriority(priority)
+	}
+	
+	// Extract suggestion
+	if suggestion, ok := jsonResponse["suggestion"].(string); ok {
+		result.Suggestion = suggestion
+	}
+	
+	// Extract requirements
+	if requirements, ok := jsonResponse["requirements"].([]interface{}); ok {
+		for _, req := range requirements {
+			if reqStr, ok := req.(string); ok {
+				result.Requirements = append(result.Requirements, reqStr)
+			}
+		}
+	}
+	
+	// Extract technical analysis
+	if technicalAnalysis, ok := jsonResponse["technicalAnalysis"].(string); ok {
+		result.TechnicalAnalysis = technicalAnalysis
+	}
+	
+	// Extract business impact
+	if businessImpact, ok := jsonResponse["businessImpact"].(string); ok {
+		result.BusinessImpact = businessImpact
+	}
+	
+	// Extract next steps
+	if nextSteps, ok := jsonResponse["nextSteps"].(string); ok {
+		result.NextSteps = nextSteps
+	}
+	
+	// Extract recommended priority
+	if recommendedPriority, ok := jsonResponse["recommendedPriority"].(string); ok {
+		result.RecommendedPriority = normalizePriority(recommendedPriority)
+	}
+	
+	// Extract recommended components
+	if components, ok := jsonResponse["recommendedComponents"].([]interface{}); ok {
+		for _, comp := range components {
+			if compStr, ok := comp.(string); ok {
+				result.RecommendedComponents = append(result.RecommendedComponents, compStr)
+			}
+		}
+	}
+	
+	// Extract recommended labels
+	if labels, ok := jsonResponse["recommendedLabels"].([]interface{}); ok {
+		for _, label := range labels {
+			if labelStr, ok := label.(string); ok {
+				result.RecommendedLabels = append(result.RecommendedLabels, labelStr)
+			}
+		}
+	}
+	
+	return result, nil
+}
+
+// extractJSON attempts to extract JSON from a string
+func extractJSON(text string) (string, error) {
+	// Find the first opening brace
+	start := strings.Index(text, "{")
+	if start == -1 {
+		return "", errors.New("no JSON found in response")
+	}
+	
+	// Find the last closing brace
+	end := strings.LastIndex(text, "}")
+	if end == -1 {
+		return "", errors.New("no closing brace found in response")
+	}
+	
+	// Extract the potential JSON string
+	jsonStr := text[start : end+1]
+	
+	// Validate that it's valid JSON
+	var js json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &js); err != nil {
+		return "", fmt.Errorf("invalid JSON: %w", err)
+	}
+	
+	return jsonStr, nil
+}
+
+// normalizeRiskLevel normalizes risk level strings to standard values
+func normalizeRiskLevel(level string) string {
+	level = strings.ToLower(level)
+	
+	switch level {
+	case "high", "critical", "severe", "important":
+		return "high"
+	case "medium", "moderate", "normal":
+		return "medium"
+	case "low", "minor", "trivial":
+		return "low"
+	default:
+		return "medium" // Default to medium if unknown
+	}
+}
+
+// normalizePriority normalizes priority strings to standard values
+func normalizePriority(priority string) string {
+	priority = strings.ToLower(priority)
+	
+	switch priority {
+	case "high", "critical", "urgent", "important":
+		return "high"
+	case "medium", "normal", "moderate":
+		return "medium"
+	case "low", "minor", "trivial":
+		return "low"
+	default:
+		return "medium" // Default to medium if unknown
+	}
+}
+
+// performBasicAnalysis is a fallback that analyzes the ticket without using LLM
+func (a *InformationGatheringAgent) performBasicAnalysis(task *models.TicketAvailableTask) *AnalysisResult {
+	// For basic analysis, we'll do some simple keyword matching
 	var result AnalysisResult
 	
 	// Extract key themes from summary (simulated)
@@ -247,12 +543,28 @@ func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailab
 		result.Suggestion = "Review this task and assign appropriate resources."
 	}
 	
-	// Simulated requirements extraction (in a real implementation, LLM would extract these)
+	// Add technical analysis
+	result.TechnicalAnalysis = "No detailed technical analysis available without LLM."
+	
+	// Add business impact
+	result.BusinessImpact = "Impact on business operations cannot be determined without further analysis."
+	
+	// Add next steps
+	result.NextSteps = "Review this ticket with the team to determine appropriate action."
+	
+	// Set same priority as recommended
+	result.RecommendedPriority = priority
+	
+	// Simulated requirements extraction
 	result.Requirements = []string{
 		"Gather more detailed information about the scope",
 		"Verify impact on existing functionality",
 		"Consider testing requirements",
 	}
+	
+	// Mark as not LLM-generated
+	result.LLMUsed = false
+	result.Confidence = 0.5 // Lower confidence for basic analysis
 	
 	return &result
 }
@@ -274,15 +586,56 @@ func (a *InformationGatheringAgent) generateSummary(task *models.TicketAvailable
 	// Add risk assessment
 	sb.WriteString(fmt.Sprintf("\n*Risk Assessment:* %s\n", capitalize(analysis.RiskLevel)))
 	sb.WriteString(fmt.Sprintf("*Priority:* %s\n", capitalize(analysis.Priority)))
+	
+	// Add technical analysis if available
+	if analysis.TechnicalAnalysis != "" {
+		sb.WriteString(fmt.Sprintf("\n*Technical Analysis:*\n%s\n", analysis.TechnicalAnalysis))
+	}
+	
+	// Add business impact if available
+	if analysis.BusinessImpact != "" {
+		sb.WriteString(fmt.Sprintf("\n*Business Impact:*\n%s\n", analysis.BusinessImpact))
+	}
 
 	// Add requirements
 	sb.WriteString("\n*Requirements:*\n")
 	for _, req := range analysis.Requirements {
 		sb.WriteString(fmt.Sprintf("- %s\n", req))
 	}
+	
+	// Add recommended changes
+	if analysis.RecommendedPriority != "" && analysis.RecommendedPriority != analysis.Priority {
+		sb.WriteString(fmt.Sprintf("\n*Recommended Priority:* %s\n", capitalize(analysis.RecommendedPriority)))
+	}
+	
+	if len(analysis.RecommendedComponents) > 0 {
+		sb.WriteString("\n*Recommended Components:*\n")
+		for _, comp := range analysis.RecommendedComponents {
+			sb.WriteString(fmt.Sprintf("- %s\n", comp))
+		}
+	}
+	
+	if len(analysis.RecommendedLabels) > 0 {
+		sb.WriteString("\n*Recommended Labels:*\n")
+		for _, label := range analysis.RecommendedLabels {
+			sb.WriteString(fmt.Sprintf("- %s\n", label))
+		}
+	}
+	
+	// Add next steps if available
+	if analysis.NextSteps != "" {
+		sb.WriteString(fmt.Sprintf("\n*Next Steps:*\n%s\n", analysis.NextSteps))
+	}
 
 	// Add suggestion
 	sb.WriteString(fmt.Sprintf("\n*Suggestion:* %s\n", analysis.Suggestion))
+	
+	// Add footer with info about analysis method
+	if analysis.LLMUsed {
+		sb.WriteString("\n_This analysis was generated with AI assistance._")
+	} else {
+		sb.WriteString("\n_This analysis was generated using basic heuristics. Enable LLM for more detailed analysis._")
+	}
 
 	return sb.String()
 }

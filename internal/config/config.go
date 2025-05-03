@@ -28,6 +28,16 @@ type Config struct {
 	AuthType  string // "jwt" or "apikey"
 	JWTSecret string
 	APIKey    string
+	
+	// LLM configuration
+	LLMEnabled     bool
+	LLMProvider    string // "openai", "azure", "anthropic"
+	LLMModel       string
+	LLMAPIKey      string
+	LLMServiceURL  string
+	LLMMaxTokens   int
+	LLMTimeout     int // in seconds
+	LLMTemperature float64
 }
 
 // init loads environment variables from .env file
@@ -56,6 +66,11 @@ func init() {
 // NewConfig creates a new configuration with values from environment variables
 func NewConfig() *Config {
 	port, _ := strconv.Atoi(getEnvOrDefault("SERVER_PORT", "8080"))
+	
+	llmMaxTokens, _ := strconv.Atoi(getEnvOrDefault("LLM_MAX_TOKENS", "4000"))
+	llmTimeout, _ := strconv.Atoi(getEnvOrDefault("LLM_TIMEOUT", "30"))
+	llmEnabled, _ := strconv.ParseBool(getEnvOrDefault("LLM_ENABLED", "false"))
+	llmTemperature, _ := strconv.ParseFloat(getEnvOrDefault("LLM_TEMPERATURE", "0.0"), 64)
 
 	return &Config{
 		// Server configuration
@@ -76,6 +91,16 @@ func NewConfig() *Config {
 		AuthType:  getEnvOrDefault("AUTH_TYPE", "apikey"), // "jwt" or "apikey"
 		JWTSecret: getEnvOrDefault("JWT_SECRET", "your-jwt-secret"),
 		APIKey:    getEnvOrDefault("API_KEY", "your-api-key"),
+		
+		// LLM configuration
+		LLMEnabled:     llmEnabled,
+		LLMProvider:    getEnvOrDefault("LLM_PROVIDER", "openai"),
+		LLMModel:       getEnvOrDefault("LLM_MODEL", "gpt-4"),
+		LLMAPIKey:      getEnvOrDefault("LLM_API_KEY", ""),
+		LLMServiceURL:  getEnvOrDefault("LLM_SERVICE_URL", ""),
+		LLMMaxTokens:   llmMaxTokens,
+		LLMTimeout:     llmTimeout,
+		LLMTemperature: llmTemperature,
 	}
 }
 
