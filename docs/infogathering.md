@@ -6,16 +6,49 @@ The InformationGatheringAgent is a key component of the Jira A2A system, respons
 
 ## Core Responsibilities
 
-1. Receive ticket information from JiraRetrievalAgent
+1. Receive ticket information from JiraRetrievalAgent (including all necessary ticket details)
 2. Analyze the ticket details using the LLM or fallback to basic analysis
 3. Generate structured insights and recommendations
-4. Return analysis results to JiraRetrievalAgent for posting to Jira
+4. Return analysis results to JiraRetrievalAgent for further processing
 
 ## Architecture
 
 The InformationGatheringAgent implements the TaskProcessor interface from the trpc-a2a-go framework. It connects to LLM services via langchain-go, providing intelligent analysis of ticket information.
 
-The agent is designed with fallback mechanisms for when LLM services are unavailable or disabled, ensuring continuous operation even in degraded states.
+The agent is designed as a pure information summarizer without any direct Jira API interactions. All Jira API interactions are handled by the JiraRetrievalAgent. This clean separation of responsibilities makes the system more modular and easier to maintain.
+
+The agent includes fallback mechanisms for when LLM services are unavailable or disabled, ensuring continuous operation even in degraded states.
+
+### Workflow Sequence
+
+```mermaid
+sequenceDiagram
+    participant JRA as JiraRetrievalAgent
+    participant IGA as InformationGatheringAgent
+    participant LLM as LLM Service
+    
+    JRA->>IGA: Send "ticket-available" task with ticket details
+    Note over IGA: Update status to "processing"
+    IGA->>IGA: Extract task data
+    Note over IGA: Update status to "analyzing_ticket"
+    
+    alt LLM Enabled and Available
+        IGA->>LLM: Send prompt with ticket data
+        LLM-->>IGA: Return analysis
+        IGA->>IGA: Parse LLM response
+    else LLM Disabled or Unavailable
+        IGA->>IGA: Perform basic analysis
+    end
+    
+    IGA->>IGA: Generate summary
+    IGA->>IGA: Create "info-gathered" result
+    Note over IGA: Update status to "completed"
+    
+    IGA-->>JRA: Return "info-gathered" task with analysis
+    Note over JRA: JiraRetrievalAgent handles all Jira API interactions
+```
+
+This sequence diagram illustrates the simplified workflow of the InformationGatheringAgent as a pure information summarizer. It receives ticket details from the JiraRetrievalAgent, performs analysis (with or without LLM), and returns the results. All Jira API interactions are handled by the JiraRetrievalAgent, not the InformationGatheringAgent.
 
 ## Implementation Details
 
@@ -27,6 +60,7 @@ The InformationGatheringAgent is structured as follows:
 type InformationGatheringAgent struct {
 	config    *config.Config
 	llmClient llm.LLMClient
+	// No Jira client as this agent doesn't interact with Jira API
 }
 ```
 
@@ -51,6 +85,7 @@ func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent
 		log.Printf("LLM is disabled in config, using basic analysis")
 	}
 	
+	// Note: No Jira client initialization as this agent doesn't interact with Jira API
 	return &InformationGatheringAgent{
 		config:    cfg,
 		llmClient: llmClient,
@@ -75,6 +110,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	}
 	
 	// Extract the task data from message
+	// This should include all necessary ticket details provided by JiraRetrievalAgent
 	var task models.TicketAvailableTask
 	if err := a.extractTaskData(message, &task); err != nil {
 		return fmt.Errorf("failed to extract task data: %w", err)
@@ -89,13 +125,13 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	analysis := a.analyzeTicketInfo(&task)
 	
 	// Generate a summary
-	comment := a.generateSummary(&task, analysis)
+	summary := a.generateSummary(&task, analysis)
 	
 	// Record the analysis result as an artifact
 	artifact := protocol.Artifact{
 		Name:        stringPtr("analysis"),
 		Description: stringPtr("Ticket Analysis"),
-		Parts:       []protocol.Part{protocol.NewTextPart(comment)},
+		Parts:       []protocol.Part{protocol.NewTextPart(summary)},
 		Metadata: map[string]interface{}{
 			"ticketId": task.TicketID,
 		},
@@ -391,7 +427,6 @@ func NewClient(cfg *config.Config) (LLMClient, error) {
 			openai.WithToken(cfg.LLMAPIKey),
 			openai.WithModel(cfg.LLMModel),
 			openai.WithBaseURL(cfg.LLMServiceURL),
-			openai.WithAzure(),
 		)
 	default:
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.LLMProvider)

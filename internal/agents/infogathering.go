@@ -17,10 +17,11 @@ import (
 )
 
 // InformationGatheringAgent implements the TaskProcessor interface from trpc-a2a-go
-// It focuses on analyzing ticket information and generating summaries
+// It focuses on analyzing ticket information and generating summaries without Jira API interactions
 type InformationGatheringAgent struct {
 	config   *config.Config
 	llmClient llm.LLMClient
+	// No Jira client as this agent doesn't interact with Jira API
 }
 
 // NewInformationGatheringAgent creates a new InformationGatheringAgent
@@ -74,6 +75,9 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	// Log the task
 	log.Printf("Processing ticket-available task for ticket %s: %s", task.TicketID, task.Summary)
 
+	// The task should already contain all necessary ticket details provided by JiraRetrievalAgent
+	// No need to fetch ticket details from Jira API
+
 	// Update status to analyzing ticket
 	log.Printf("Updating status to analyzing_ticket")
 	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), nil); err != nil {
@@ -86,14 +90,14 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 
 	// Generate a summary
 	log.Printf("Generating summary")
-	comment := a.generateSummary(&task, analysis)
+	summary := a.generateSummary(&task, analysis)
 
 	// Record the analysis result as an artifact
 	log.Printf("Adding artifact with analysis result")
 	artifact := protocol.Artifact{
 		Name:        stringPtr("analysis"),
 		Description: stringPtr("Ticket Analysis"),
-		Parts:       []protocol.Part{protocol.NewTextPart(comment)},
+		Parts:       []protocol.Part{protocol.NewTextPart(summary)},
 		Metadata: map[string]interface{}{
 			"ticketId": task.TicketID,
 		},
@@ -119,7 +123,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 			"BusinessImpact":   analysis.BusinessImpact,
 			"NextSteps":        analysis.NextSteps,
 		},
-		CommentURL: fmt.Sprintf("https://jira.example.com/browse/%s", task.TicketID), // Placeholder URL, JiraRetrievalAgent will handle actual Jira integration
+		// No CommentURL as this agent doesn't interact with Jira API
 	}
 	
 	// Add recommended fields if available
