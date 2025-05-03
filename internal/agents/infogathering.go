@@ -8,24 +8,22 @@ import (
 	"strings"
 
 	"github.com/tuannvm/jira-a2a/internal/config"
-	"github.com/tuannvm/jira-a2a/internal/jira"
 	"github.com/tuannvm/jira-a2a/internal/models"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
+	"slices"
 )
 
 // InformationGatheringAgent implements the TaskProcessor interface from trpc-a2a-go
+// It focuses on analyzing ticket information and generating summaries
 type InformationGatheringAgent struct {
-	config     *config.Config
-	jiraClient *jira.Client
+	config *config.Config
 }
 
 // NewInformationGatheringAgent creates a new InformationGatheringAgent
 func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent {
-	// Create a new Jira client
 	return &InformationGatheringAgent{
-		config:     cfg,
-		jiraClient: jira.NewClient(cfg),
+		config: cfg,
 	}
 }
 
@@ -58,53 +56,28 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	// Log the task
 	log.Printf("Processing ticket-available task for ticket %s: %s", task.TicketID, task.Summary)
 
-	// Update status to fetching ticket details
-	log.Printf("Updating status to fetching_ticket_details")
-	if err := handle.UpdateStatus(protocol.TaskState("fetching_ticket_details"), nil); err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// Fetch the ticket details
-	log.Printf("Fetching ticket details for %s", task.TicketID)
-	ticket, err := a.jiraClient.GetTicket(task.TicketID)
-	if err != nil {
-		log.Printf("Failed to fetch ticket details: %v", err)
-		return fmt.Errorf("failed to fetch ticket details: %w", err)
-	}
-
 	// Update status to analyzing ticket
 	log.Printf("Updating status to analyzing_ticket")
 	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), nil); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Analyze the ticket for missing fields
-	log.Printf("Analyzing ticket")
-	missingFields, collectedFields := a.analyzeTicket(ticket)
+	// Analyze the ticket information
+	log.Printf("Analyzing ticket information")
+	analysis := a.analyzeTicketInfo(&task)
 
-	// Update status to posting comment
-	log.Printf("Updating status to posting_comment")
-	if err := handle.UpdateStatus(protocol.TaskState("posting_comment"), nil); err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
+	// Generate a summary
+	log.Printf("Generating summary")
+	comment := a.generateSummary(&task, analysis)
 
-	// Generate and post a comment
-	log.Printf("Generating and posting comment")
-	comment := a.generateComment(ticket, missingFields, collectedFields)
-	jiraComment, err := a.jiraClient.PostComment(task.TicketID, comment)
-	if err != nil {
-		log.Printf("Failed to post comment: %v", err)
-		return fmt.Errorf("failed to post comment: %w", err)
-	}
-
-	// Record the comment URL as an artifact - use metadata instead of URL
-	log.Printf("Adding artifact with comment URL: %s", jiraComment.URL)
+	// Record the analysis result as an artifact
+	log.Printf("Adding artifact with analysis result")
 	artifact := protocol.Artifact{
-		Name:        stringPtr("comment"),
-		Description: stringPtr("Jira Comment"),
-		Parts:       []protocol.Part{},
+		Name:        stringPtr("analysis"),
+		Description: stringPtr("Ticket Analysis"),
+		Parts:       []protocol.Part{protocol.NewTextPart(comment)},
 		Metadata: map[string]interface{}{
-			"url": jiraComment.URL,
+			"ticketId": task.TicketID,
 		},
 	}
 	if err := handle.AddArtifact(artifact); err != nil {
@@ -114,9 +87,13 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	// Create the info-gathered result
 	log.Printf("Creating info-gathered result")
 	infoGatheredTask := models.InfoGatheredTask{
-		TicketID:        task.TicketID,
-		CollectedFields: collectedFields,
-		CommentURL:      jiraComment.URL,
+		TicketID: task.TicketID,
+		CollectedFields: map[string]string{
+			"Summary":    task.Summary,
+			"Analysis":   "Completed",
+			"Suggestion": analysis.Suggestion,
+		},
+		CommentURL: fmt.Sprintf("https://jira.example.com/browse/%s", task.TicketID), // Placeholder URL, JiraRetrievalAgent will handle actual Jira integration
 	}
 
 	// Marshal the result to JSON for the response
@@ -169,30 +146,9 @@ func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, ta
 			}
 		}
 
-		// If we get here, we haven't successfully parsed the task from a TextPart
-		// Let's try another approach - check if the specific part has ticketId and summary
+		// Try other parsing approaches if direct method fails
 		for _, part := range message.Parts {
 			partJSON, _ := json.Marshal(part)
-			log.Printf("Checking part: %s", string(partJSON))
-
-			// First try to extract type and text fields if this is a TextPart representation
-			var typedPart struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}
-			if err := json.Unmarshal(partJSON, &typedPart); err == nil {
-				if typedPart.Type == "text" && typedPart.Text != "" {
-					log.Printf("Found text type part with text: %s", typedPart.Text)
-					
-					// Try to unmarshal the text field as our task
-					if err := json.Unmarshal([]byte(typedPart.Text), task); err == nil {
-						log.Printf("Successfully parsed task from text field")
-						if task.TicketID != "" && task.Summary != "" {
-							return nil
-						}
-					}
-				}
-			}
 			
 			// Try to extract ticketId and summary directly from the part
 			var directPart struct {
@@ -211,96 +167,135 @@ func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, ta
 			}
 		}
 	}
-	
-	// Special handling for cases where we're dealing with a serialized TextPart
-	// This is to handle the format seen in the logs: {"type":"text","text":"..."}
-	for _, part := range message.Parts {
-		if textPart, ok := part.(*protocol.TextPart); ok && textPart != nil {
-			var partObject struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}
-			
-			if err := json.Unmarshal([]byte(textPart.Text), &partObject); err == nil {
-				if partObject.Type == "text" && partObject.Text != "" {
-					// We may have a nested TextPart representation
-					log.Printf("Found nested TextPart: %s", partObject.Text)
-					
-					// Try to extract the ticket data from this nested text
-					if err := json.Unmarshal([]byte(partObject.Text), task); err == nil {
-						log.Printf("Successfully parsed task from nested TextPart")
-						if task.TicketID != "" && task.Summary != "" {
-							return nil
-						}
-					}
-				}
-			}
-		}
-	}
 
 	// If we got here, we weren't able to extract the task data
 	return fmt.Errorf("no valid ticket-available task data found in message")
 }
 
-// analyzeTicket analyzes a ticket for missing fields and collects available fields
-func (a *InformationGatheringAgent) analyzeTicket(ticket *models.JiraTicket) ([]string, map[string]string) {
-	missingFields := []string{}
-	collectedFields := make(map[string]string)
-
-	// Check for description
-	if ticket.Description == "" {
-		missingFields = append(missingFields, "Description")
-	} else {
-		collectedFields["Description"] = "Present"
-	}
-
-	// Check for acceptance criteria (assuming it's in the description with a heading)
-	if !strings.Contains(strings.ToLower(ticket.Description), "acceptance criteria") {
-		missingFields = append(missingFields, "Acceptance Criteria")
-	} else {
-		collectedFields["Acceptance Criteria"] = "Present"
-	}
-
-	// Check for due date
-	if ticket.DueDate == "" {
-		missingFields = append(missingFields, "Due Date")
-	} else {
-		collectedFields["Due Date"] = ticket.DueDate
-	}
-
-	// Check for links
-	if len(ticket.Links) == 0 {
-		missingFields = append(missingFields, "Linked Tickets")
-	} else {
-		collectedFields["Linked Tickets"] = fmt.Sprintf("%d linked tickets", len(ticket.Links))
-	}
-
-	return missingFields, collectedFields
+// AnalysisResult represents the analysis of a ticket
+type AnalysisResult struct {
+	KeyThemes    []string
+	RiskLevel    string
+	Priority     string
+	Suggestion   string
+	Requirements []string
 }
 
-// generateComment generates a comment for the Jira ticket
-func (a *InformationGatheringAgent) generateComment(ticket *models.JiraTicket, missingFields []string, collectedFields map[string]string) string {
+// analyzeTicketInfo analyzes the ticket information and produces insights
+// This would normally integrate with an LLM for deeper analysis
+func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailableTask) *AnalysisResult {
+	// In a real implementation, this would use LLM to analyze the ticket
+	// For now, we'll do some basic analysis based on the summary and metadata
+	
+	var result AnalysisResult
+	
+	// Extract key themes from summary (simulated)
+	words := strings.Fields(strings.ToLower(task.Summary))
+	themes := make(map[string]bool)
+	
+	// Look for common themes in the summary
+	for _, word := range words {
+		switch {
+		case strings.Contains(word, "bug") || strings.Contains(word, "fix") || strings.Contains(word, "issue"):
+			themes["bug"] = true
+		case strings.Contains(word, "feature") || strings.Contains(word, "add") || strings.Contains(word, "new"):
+			themes["feature"] = true
+		case strings.Contains(word, "improve") || strings.Contains(word, "enhance") || strings.Contains(word, "update"):
+			themes["enhancement"] = true
+		case strings.Contains(word, "document") || strings.Contains(word, "doc"):
+			themes["documentation"] = true
+		}
+	}
+	
+	// Convert themes to slice
+	for theme := range themes {
+		result.KeyThemes = append(result.KeyThemes, theme)
+	}
+	
+	// If no themes detected, add "task" as default
+	if len(result.KeyThemes) == 0 {
+		result.KeyThemes = append(result.KeyThemes, "task")
+	}
+	
+	// Determine risk level and priority from metadata
+	priority := "medium"
+	if task.Metadata != nil {
+		if p, ok := task.Metadata["priority"]; ok {
+			priority = strings.ToLower(p)
+		}
+	}
+	result.Priority = priority
+	
+	// Set risk level based on priority
+	switch priority {
+	case "high", "critical", "urgent":
+		result.RiskLevel = "high"
+	case "medium":
+		result.RiskLevel = "medium"
+	default:
+		result.RiskLevel = "low"
+	}
+	
+	// Generate suggestion based on analysis
+	if result.RiskLevel == "high" {
+		result.Suggestion = "This is a high-priority task that should be addressed promptly."
+	} else if contains(result.KeyThemes, "bug") {
+		result.Suggestion = "This bug should be investigated to determine its impact on users."
+	} else if contains(result.KeyThemes, "feature") {
+		result.Suggestion = "This new feature request should be evaluated for roadmap alignment."
+	} else {
+		result.Suggestion = "Review this task and assign appropriate resources."
+	}
+	
+	// Simulated requirements extraction (in a real implementation, LLM would extract these)
+	result.Requirements = []string{
+		"Gather more detailed information about the scope",
+		"Verify impact on existing functionality",
+		"Consider testing requirements",
+	}
+	
+	return &result
+}
+
+// generateSummary creates a formatted summary based on the analysis
+func (a *InformationGatheringAgent) generateSummary(task *models.TicketAvailableTask, analysis *AnalysisResult) string {
 	var sb strings.Builder
 
 	sb.WriteString("*Information Gathering Summary*\n\n")
-	sb.WriteString("I've analyzed this ticket and gathered the following information:\n\n")
+	sb.WriteString(fmt.Sprintf("I've analyzed ticket %s: \"%s\" and gathered the following information:\n\n", 
+		task.TicketID, task.Summary))
 
-	// Add collected fields
-	sb.WriteString("*Collected Information:*\n")
-	for field, value := range collectedFields {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", field, value))
+	// Add key themes
+	sb.WriteString("*Key Themes:*\n")
+	for _, theme := range analysis.KeyThemes {
+		sb.WriteString(fmt.Sprintf("- %s\n", capitalize(theme)))
 	}
 
-	// Add missing fields
-	if len(missingFields) > 0 {
-		sb.WriteString("\n*Missing Information:*\n")
-		for _, field := range missingFields {
-			sb.WriteString(fmt.Sprintf("- %s\n", field))
-		}
-		sb.WriteString("\nPlease update the ticket with the missing information to help the team better understand the requirements.")
-	} else {
-		sb.WriteString("\nAll required information is present in this ticket. Thank you for providing a complete ticket!")
+	// Add risk assessment
+	sb.WriteString(fmt.Sprintf("\n*Risk Assessment:* %s\n", capitalize(analysis.RiskLevel)))
+	sb.WriteString(fmt.Sprintf("*Priority:* %s\n", capitalize(analysis.Priority)))
+
+	// Add requirements
+	sb.WriteString("\n*Requirements:*\n")
+	for _, req := range analysis.Requirements {
+		sb.WriteString(fmt.Sprintf("- %s\n", req))
 	}
+
+	// Add suggestion
+	sb.WriteString(fmt.Sprintf("\n*Suggestion:* %s\n", analysis.Suggestion))
 
 	return sb.String()
+}
+
+// Helper function to check if a slice contains a string
+func contains(slice []string, item string) bool {
+	return slices.Contains(slice, item)
+}
+
+// Helper function to capitalize the first letter of a string
+func capitalize(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
