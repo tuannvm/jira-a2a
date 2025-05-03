@@ -13,9 +13,9 @@ import (
 
 // Client represents a Jira API client
 type Client struct {
-	config     *config.Config
-	jiraClient *v2.Client
-	ctx        context.Context
+	Config     *config.Config
+	JiraClient *v2.Client
+	Ctx        context.Context
 }
 
 // NewClient creates a new Jira client
@@ -36,24 +36,25 @@ func NewClient(cfg *config.Config) *Client {
 	}
 
 	return &Client{
-		config:     cfg,
-		jiraClient: jiraClient,
-		ctx:        ctx,
+		Config:     cfg,
+		JiraClient: jiraClient,
+		Ctx:        ctx,
 	}
 }
 
 // GetTicket fetches a Jira ticket by its ID
 func (c *Client) GetTicket(ticketID string) (*internalModels.JiraTicket, error) {
-	if c.jiraClient == nil {
+	if c.JiraClient == nil {
 		return nil, fmt.Errorf("jira client not initialized")
 	}
 	
 	// Define fields to retrieve and expand options
-	fields := []string{"summary", "description", "duedate", "issuelinks"}
+	fields := []string{"summary", "description", "duedate", "issuelinks", "status", "priority", "resolution", 
+		"assignee", "reporter", "issuetype", "project", "created", "updated", "components", "labels"}
 	expand := []string{} // No expansion needed for now
 	
 	// Fetch the issue with relevant fields
-	issue, response, err := c.jiraClient.Issue.Get(c.ctx, ticketID, fields, expand)
+	issue, response, err := c.JiraClient.Issue.Get(c.Ctx, ticketID, fields, expand)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get issue: %w", err)
 	}
@@ -75,6 +76,61 @@ func (c *Client) GetTicket(ticketID string) (*internalModels.JiraTicket, error) 
 	// Handle due date (safely converted to string)
 	if issue.Fields.DueDate != nil {
 		ticket.DueDate = fmt.Sprintf("%v", issue.Fields.DueDate)
+	}
+
+	// Extract basic fields into the Fields map
+	if issue.Fields.Status != nil {
+		ticket.Fields["status"] = issue.Fields.Status.Name
+	}
+	
+	if issue.Fields.Priority != nil {
+		ticket.Fields["priority"] = issue.Fields.Priority.Name
+	}
+	
+	if issue.Fields.Resolution != nil {
+		ticket.Fields["resolution"] = issue.Fields.Resolution.Name
+	}
+	
+	if issue.Fields.Assignee != nil {
+		ticket.Fields["assignee"] = issue.Fields.Assignee.DisplayName
+	}
+	
+	if issue.Fields.Reporter != nil {
+		ticket.Fields["reporter"] = issue.Fields.Reporter.DisplayName
+	}
+	
+	if issue.Fields.IssueType != nil {
+		ticket.Fields["issueType"] = issue.Fields.IssueType.Name
+	}
+	
+	if issue.Fields.Project != nil {
+		ticket.Fields["project"] = issue.Fields.Project.Name
+	}
+	
+	// Handle datetime fields
+	if issue.Fields.Created != nil {
+		ticket.Fields["created"] = fmt.Sprintf("%v", issue.Fields.Created)
+	}
+	
+	if issue.Fields.Updated != nil {
+		ticket.Fields["updated"] = fmt.Sprintf("%v", issue.Fields.Updated)
+	}
+	
+	// Handle array fields
+	if issue.Fields.Components != nil {
+		components := []string{}
+		for _, component := range issue.Fields.Components {
+			if component != nil {
+				components = append(components, component.Name)
+			}
+		}
+		if len(components) > 0 {
+			ticket.Fields["components"] = components
+		}
+	}
+	
+	if issue.Fields.Labels != nil && len(issue.Fields.Labels) > 0 {
+		ticket.Fields["labels"] = issue.Fields.Labels
 	}
 
 	// Extract issue links if available
@@ -101,7 +157,7 @@ func (c *Client) GetTicket(ticketID string) (*internalModels.JiraTicket, error) 
 
 // PostComment posts a comment to a Jira ticket
 func (c *Client) PostComment(ticketID, commentText string) (*internalModels.JiraComment, error) {
-	if c.jiraClient == nil {
+	if c.JiraClient == nil {
 		return nil, fmt.Errorf("jira client not initialized")
 	}
 
@@ -111,7 +167,7 @@ func (c *Client) PostComment(ticketID, commentText string) (*internalModels.Jira
 	}
 
 	// Post the comment to the issue using the v2 method
-	responseComment, response, err := c.jiraClient.Issue.Comment.Add(c.ctx, ticketID, commentPayload, nil)
+	responseComment, response, err := c.JiraClient.Issue.Comment.Add(c.Ctx, ticketID, commentPayload, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to post comment: %w", err)
 	}
@@ -134,7 +190,7 @@ func (c *Client) PostComment(ticketID, commentText string) (*internalModels.Jira
 
 	// Add the URL
 	jiraComment.URL = fmt.Sprintf("%s/browse/%s?focusedCommentId=%s",
-		c.config.JiraBaseURL, ticketID, jiraComment.ID)
+		c.Config.JiraBaseURL, ticketID, jiraComment.ID)
 
 	return jiraComment, nil
 }
