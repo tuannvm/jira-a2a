@@ -7,9 +7,34 @@ The InformationGatheringAgent is a key component of the Jira A2A system, respons
 ## Core Responsibilities
 
 1. Receive ticket information from JiraRetrievalAgent (including all necessary ticket details)
-2. Analyze the ticket details using the LLM or fallback to basic analysis
+2. Analyze the ticket details using the LLM
 3. Generate structured insights and recommendations
 4. Return analysis results to JiraRetrievalAgent for further processing
+
+## Configuration
+
+The InformationGatheringAgent is configured through the central Viper-based configuration system. The configuration is loaded from environment variables, a `.env` file, and command-line flags.
+
+### Key Configuration Parameters
+
+- **Basic Settings**:
+  - `agent_name`: Set to "InformationGatheringAgent"
+  - `server_host`: Host to bind the server to (default: "localhost")
+  - `server_port`: Port for the agent's server (default: 8081 for InformationGatheringAgent)
+
+- **LLM Integration**:
+  - `llm_enabled`: Whether to use LLM for analysis (boolean)
+  - `llm_provider`: The LLM provider to use ("openai")
+  - `llm_model`: The model to use (e.g., "gpt-4")
+  - `llm_api_key`: API key for the LLM provider (can also be set via `OPENAI_API_KEY`)
+  - `llm_max_tokens`: Maximum tokens for LLM responses
+  - `llm_temperature`: Temperature setting for LLM responses
+  - `llm_timeout`: Timeout in seconds for LLM requests
+
+- **Authentication**:
+  - `auth_type`: Authentication type ("jwt" or "apikey")
+  - `jwt_secret`: Secret for JWT authentication
+  - `api_key`: API key for authentication
 
 ## Architecture
 
@@ -17,7 +42,33 @@ The InformationGatheringAgent implements the TaskProcessor interface from the tr
 
 The agent is designed as a pure information summarizer without any direct Jira API interactions. All Jira API interactions are handled by the JiraRetrievalAgent. This clean separation of responsibilities makes the system more modular and easier to maintain.
 
-The agent includes fallback mechanisms for when LLM services are unavailable or disabled, ensuring continuous operation even in degraded states.
+### Component Architecture
+
+```mermaid
+flowchart TB
+    subgraph "Jira A2A System"
+        subgraph "JiraRetrievalAgent"
+            JR[JiraRetrievalAgent] --> JC[Jira Client]
+            JR --> TM1[Task Manager]
+        end
+
+        subgraph "InformationGatheringAgent"
+            IG[InformationGatheringAgent] --> LLMC[LLM Client]
+            IG --> TM2[Task Manager]
+            IG --> DE[Data Extractor]
+            IG --> AP[Analysis Processor]
+        end
+
+        JR -- "TicketAvailableTask" --> IG
+        IG -- "InfoGatheredTask" --> JR
+    end
+
+    JC <-- "API Calls" --> JIRA[Jira Server]
+    LLMC <-- "API Calls" --> LLM[LLM Service - OpenAI]
+
+```
+
+This architecture diagram illustrates the key components of the InformationGatheringAgent and its relationship with the JiraRetrievalAgent. The InformationGatheringAgent has no direct connection to the Jira Server, relying entirely on the JiraRetrievalAgent for ticket information.
 
 ### Workflow Sequence
 
@@ -36,8 +87,6 @@ sequenceDiagram
         IGA->>LLM: Send prompt with ticket data
         LLM-->>IGA: Return analysis
         IGA->>IGA: Parse LLM response
-    else LLM Disabled or Unavailable
-        IGA->>IGA: Perform basic analysis
     end
     
     IGA->>IGA: Generate summary
@@ -54,520 +103,490 @@ This sequence diagram illustrates the simplified workflow of the InformationGath
 
 ### 1. Agent Structure
 
-The InformationGatheringAgent is structured as follows:
+The InformationGatheringAgent consists of the following key components:
 
-```go
-type InformationGatheringAgent struct {
-	config    *config.Config
-	llmClient llm.LLMClient
-	// No Jira client as this agent doesn't interact with Jira API
-}
+- **Main Agent**: Implements the TaskProcessor interface from the trpc-a2a-go framework
+- **LLM Client**: Connects to language model services via langchain-go for intelligent analysis
+- **Data Extraction**: Processes incoming messages to extract ticket information
+- **Analysis Engine**: Analyzes ticket data using LLM to generate insights
+- **Response Formatter**: Creates structured responses for the JiraRetrievalAgent
+
+### 2. Initialization Process
+
+The agent initialization follows these steps:
+
+1. Load configuration using Viper (environment variables, .env file, command-line flags)
+2. Initialize the LLM client if LLM is enabled in configuration
+3. Set up the agent with the configuration and LLM client
+4. Register the agent with the A2A server as a task processor
+
+The agent is designed as a pure information summarizer without any direct Jira API interactions. All Jira API interactions are handled by the JiraRetrievalAgent, maintaining a clean separation of responsibilities.
+
+### 3. Task Processing Workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> TaskReceived: Receive Task
+    
+    TaskReceived --> Processing: Update Status
+    Processing --> DataExtraction: Extract Data
+    
+    DataExtraction --> ValidationFailed: Validation Fails
+    ValidationFailed --> [*]: Return Error
+    
+    DataExtraction --> AnalyzingTicket: Validation Succeeds
+    AnalyzingTicket --> LLMAnalysis: Send to LLM
+    
+    LLMAnalysis --> LLMError: LLM Error
+    LLMError --> [*]: Return Error
+    
+    LLMAnalysis --> ResultProcessing: LLM Success
+    ResultProcessing --> SummaryGeneration: Generate Summary
+    SummaryGeneration --> ArtifactCreation: Create Artifact
+    
+    ArtifactCreation --> ResponseCreation: Create Response
+    ResponseCreation --> TaskCompletion: Complete Task
+    
+    TaskCompletion --> [*]: Return Results
+    
+    state Processing {
+        [*] --> UpdateStatus
+        UpdateStatus --> [*]
+    }
+    
+    state DataExtraction {
+        [*] --> ExtractFromParts
+        ExtractFromParts --> ParseJSON
+        ParseJSON --> ValidateFields
+        ValidateFields --> [*]
+    }
+    
+    state LLMAnalysis {
+        [*] --> CreatePrompt
+        CreatePrompt --> CallLLM
+        CallLLM --> ParseResponse
+        ParseResponse --> [*]
+    }
+    
+    state ResponseCreation {
+        [*] --> CreateInfoGatheredTask
+        CreateInfoGatheredTask --> SerializeToJSON
+        SerializeToJSON --> CreateMessage
+        CreateMessage --> [*]
+    }
 ```
 
-- `config`: Contains configuration settings for the agent and LLM
-- `llmClient`: Client for interacting with the LLM service via langchain-go
+The agent processes tasks through the following high-level workflow:
 
-### 2. Initialization
+1. **Task Reception**:
+   - Receives a task from the JiraRetrievalAgent with a unique task ID
+   - The task contains ticket information in a structured message format
+   - Updates task status to "processing" to indicate work has begun
 
-```go
-func NewInformationGatheringAgent(cfg *config.Config) *InformationGatheringAgent {
-	var llmClient llm.LLMClient
-	
-	// Initialize LLM client if enabled
-	if cfg.LLMEnabled {
-		var err error
-		llmClient, err = llm.NewClient(cfg)
-		if err != nil {
-			log.Printf("Warning: Failed to initialize LLM client: %v", err)
-			log.Printf("Falling back to basic analysis without LLM")
-		}
-	} else {
-		log.Printf("LLM is disabled in config, using basic analysis")
-	}
-	
-	// Note: No Jira client initialization as this agent doesn't interact with Jira API
-	return &InformationGatheringAgent{
-		config:    cfg,
-		llmClient: llmClient,
-	}
-}
+2. **Data Extraction**:
+   - Extracts ticket data from the message parts
+   - Parses the TicketAvailableTask structure containing ticket ID, summary, and metadata
+   - All necessary ticket details are provided by the JiraRetrievalAgent, no direct Jira API calls needed
+
+3. **Analysis Phase**:
+   - Updates task status to "analyzing_ticket"
+   - Sends ticket data to the LLM for intelligent analysis
+   - The LLM analyzes the ticket content and generates structured insights
+
+4. **Summary Generation**:
+   - Uses the LLM-generated analysis to create a comprehensive summary
+   - The summary format and content are defined by the LLM prompt
+   - Records the LLM-generated summary as an artifact with the task
+   - No static templates or hardcoded formatting rules are used
+
+5. **Response Creation**:
+   - Constructs an InfoGatheredTask with the analysis results from the LLM
+   - Maintains core ticket identification (ID, summary)
+   - Includes the structured analysis provided by the LLM
+   - The specific analysis fields are determined by the LLM prompt, not hardcoded in the agent
+
+6. **Task Completion**:
+   - Serializes the InfoGatheredTask to JSON
+   - Creates a response message with the serialized data
+   - Updates the task status to "completed"
+   - Returns the results to the JiraRetrievalAgent
+
+The entire process is designed to be stateless and focused solely on information analysis, with no direct Jira API interactions.
+
+### 4. Data Extraction Process
+
+The data extraction process is a critical component that parses the incoming message from the JiraRetrievalAgent and extracts the ticket information. This process is particularly complex due to the nested structure of Jira webhook data.
+
+#### Jira Webhook Data Structure
+
+The JiraRetrievalAgent processes webhook data from Jira that follows this structure:
+
+- **Base Information**:
+  - Event ID and timestamp
+  - Webhook event type (e.g., "jira:issue_updated")
+
+- **Issue Details**:
+  - Issue ID and key (e.g., "JRA-20002")
+  - Fields containing summary, description, priority, etc.
+  - Labels and other metadata
+
+- **User Information**:
+  - Details about who triggered the event
+
+- **Changelog**:
+  - Records of what changed in the issue
+  - Previous and new values for modified fields
+
+- **Comments**:
+  - Any comments added to the issue
+  - Author information and timestamps
+
+#### Extraction Strategies
+
+The InformationGatheringAgent employs several strategies to handle this complex data:
+
+- **Multiple Message Format Support**: Handles both DataPart and TextPart message types from the A2A protocol
+- **Nested JSON Parsing**: Recursively extracts data from nested JSON structures
+- **Type Handling**: Properly processes different data types (strings, maps, arrays, etc.)
+- **Fallback Mechanisms**: Implements multiple parsing approaches to ensure data extraction succeeds
+
+#### Key Information Extracted
+
+- **Ticket Identifiers**:
+  - Ticket ID and key
+  - URL and self-links
+
+- **Content Details**:
+  - Summary and description
+  - Creation and update timestamps
+
+- **Classification Data**:
+  - Priority and issue type
+  - Components and labels
+  - Status information
+
+- **Event Context**:
+  - Event type (created, updated, etc.)
+  - User who triggered the event
+  - Changelog details
+
+The extraction process is designed to be resilient, handling the complex nested structures that come from Jira webhooks while maintaining compatibility with the A2A messaging protocol.
+
+### 5. Data Flow Between Agents
+
+The data flow between the JiraRetrievalAgent and the InformationGatheringAgent follows a well-defined process:
+
+```mermaid
+sequenceDiagram
+    participant Jira as Jira Server
+    participant JRA as JiraRetrievalAgent
+    participant IGA as InformationGatheringAgent
+    participant LLM as LLM Service
+    
+    Jira->>JRA: Send Webhook Event
+    Note over JRA: Process Webhook Data
+    
+    JRA->>Jira: Fetch Additional Ticket Details (if needed)
+    Jira-->>JRA: Return Ticket Information
+    
+    Note over JRA: Create TicketAvailableTask
+    JRA->>IGA: Send TicketAvailableTask
+    
+    Note over IGA: Extract Task Data
+    Note over IGA: Prepare for Analysis
+    
+    IGA->>LLM: Send Prompt with Ticket Data
+    LLM-->>IGA: Return Analysis Results
+    
+    Note over IGA: Process LLM Response
+    Note over IGA: Create InfoGatheredTask
+    
+    IGA->>JRA: Return InfoGatheredTask
+    
+    Note over JRA: Process Analysis Results
+    JRA->>Jira: Update Ticket (if needed)
 ```
 
-The initialization function sets up the agent with the provided configuration. It conditionally initializes the LLM client if enabled, with appropriate fallback mechanisms if initialization fails.
+The data flow process consists of the following key steps:
 
-### 3. Task Processing Flow
+1. **Webhook Reception**:
+   - JiraRetrievalAgent receives a webhook from Jira
+   - It processes the webhook data and extracts relevant ticket information
+   - It may enrich this data with additional information from Jira API calls
 
-The main entry point is the `Process` method implementing the TaskProcessor interface:
+2. **Task Creation**:
+   - JiraRetrievalAgent creates a `TicketAvailableTask` with the extracted data
+   - This task includes the ticket ID, summary, description, and metadata
+   - The task is serialized to JSON format
 
-```go
-func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, message protocol.Message, handle taskmanager.TaskHandle) error {
-	// Log the incoming message for debugging
-	log.Printf("Received task with ID: %s", taskID)
-	
-	// Update status to processing
-	if err := handle.UpdateStatus(protocol.TaskState("processing"), nil); err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
-	
-	// Extract the task data from message
-	// This should include all necessary ticket details provided by JiraRetrievalAgent
-	var task models.TicketAvailableTask
-	if err := a.extractTaskData(message, &task); err != nil {
-		return fmt.Errorf("failed to extract task data: %w", err)
-	}
-	
-	// Update status to analyzing ticket
-	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), nil); err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
-	
-	// Analyze the ticket information
-	analysis := a.analyzeTicketInfo(&task)
-	
-	// Generate a summary
-	summary := a.generateSummary(&task, analysis)
-	
-	// Record the analysis result as an artifact
-	artifact := protocol.Artifact{
-		Name:        stringPtr("analysis"),
-		Description: stringPtr("Ticket Analysis"),
-		Parts:       []protocol.Part{protocol.NewTextPart(summary)},
-		Metadata: map[string]interface{}{
-			"ticketId": task.TicketID,
-		},
-	}
-	if err := handle.AddArtifact(artifact); err != nil {
-		return fmt.Errorf("failed to record artifact: %w", err)
-	}
-	
-	// Create the info-gathered result with extended fields
-	infoGatheredTask := models.InfoGatheredTask{
-		TicketID: task.TicketID,
-		CollectedFields: map[string]string{
-			"Summary":           task.Summary,
-			"Analysis":          "Completed",
-			"Suggestion":        analysis.Suggestion,
-			"RiskLevel":         analysis.RiskLevel,
-			"Priority":          analysis.Priority,
-			"KeyThemes":         strings.Join(analysis.KeyThemes, ", "),
-			"Requirements":      strings.Join(analysis.Requirements, ", "),
-			"LLMGenerated":      fmt.Sprintf("%v", analysis.LLMUsed),
-			"TechnicalAnalysis": analysis.TechnicalAnalysis,
-			"BusinessImpact":    analysis.BusinessImpact,
-			"NextSteps":         analysis.NextSteps,
-		},
-	}
-	
-	// Add recommended fields if available
-	if analysis.RecommendedPriority != "" {
-		infoGatheredTask.CollectedFields["RecommendedPriority"] = analysis.RecommendedPriority
-	}
-	
-	if len(analysis.RecommendedComponents) > 0 {
-		infoGatheredTask.CollectedFields["RecommendedComponents"] = strings.Join(analysis.RecommendedComponents, ", ")
-	}
-	
-	if len(analysis.RecommendedLabels) > 0 {
-		infoGatheredTask.CollectedFields["RecommendedLabels"] = strings.Join(analysis.RecommendedLabels, ", ")
-	}
-	
-	// Create the response message
-	resultJSON, err := json.Marshal(infoGatheredTask)
-	if err != nil {
-		return fmt.Errorf("failed to marshal info-gathered task: %w", err)
-	}
-	
-	responseMsg := &protocol.Message{
-		Parts: []protocol.Part{protocol.NewTextPart(string(resultJSON))},
-	}
-	
-	// Complete the task with the response
-	if err := handle.UpdateStatus(protocol.TaskState("completed"), responseMsg); err != nil {
-		return fmt.Errorf("failed to complete task: %w", err)
-	}
-	
-	log.Printf("Task %s completed successfully", taskID)
-	return nil
-}
-```
+3. **Message Transmission**:
+   - JiraRetrievalAgent sends the task to the InformationGatheringAgent via the A2A protocol
+   - The message can be sent as either a DataPart or TextPart
+   - The message contains all necessary information for analysis, eliminating the need for the InformationGatheringAgent to make Jira API calls
 
-The process method handles the entire task lifecycle from receiving the task to returning the analysis. It maintains status updates throughout the process for better observability.
+4. **Task Reception and Processing**:
+   - InformationGatheringAgent receives the message and extracts the task data
+   - It processes the data and prepares it for LLM analysis
+   - No direct Jira API calls are made by the InformationGatheringAgent
 
-### 4. Extracting Task Data
+5. **Result Transmission**:
+   - InformationGatheringAgent creates an InfoGatheredTask with the analysis results
+   - It sends the task back to the JiraRetrievalAgent
+   - JiraRetrievalAgent can then update the Jira ticket if needed
 
-```go
-func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, task *models.TicketAvailableTask) error {
-	// Handle case when message has parts
-	if len(message.Parts) > 0 {
-		// Try to extract text parts
-		for _, part := range message.Parts {
-			if textPart, ok := part.(*protocol.TextPart); ok && textPart != nil {
-				// Try direct unmarshal
-				if err := json.Unmarshal([]byte(textPart.Text), task); err == nil {
-					// Validate required fields
-					if task.TicketID != "" && task.Summary != "" {
-						return nil
-					}
-				}
-			}
-		}
-		
-		// Try other parsing approaches if direct method fails
-		// ...
-	}
-	
-	return fmt.Errorf("no valid ticket-available task data found in message")
-}
-```
-
-This function extracts the task data from the message parts, handling various formats and providing robust error handling.
-
-### 5. Analysis Result Structure
-
-```go
-type AnalysisResult struct {
-	KeyThemes            []string
-	RiskLevel            string
-	Priority             string
-	Suggestion           string
-	Requirements         []string
-	LLMUsed              bool
-	Confidence           float64
-	TechnicalAnalysis    string
-	BusinessImpact       string
-	NextSteps            string
-	RecommendedPriority  string
-	RecommendedComponents []string
-	RecommendedLabels    []string
-}
-```
-
-The AnalysisResult structure contains the complete analysis output, including both the basic analysis fields and extended fields for more comprehensive insights.
+This clean separation of responsibilities ensures that the InformationGatheringAgent can focus solely on data analysis while the JiraRetrievalAgent handles all Jira API interactions.
 
 ### 6. LLM Integration for Analysis
 
-The analysis logic is split into two paths:
+The agent integrates with Language Model services through the langchain-go library to provide intelligent analysis of ticket information. The LLM integration is a critical component of the InformationGatheringAgent and is always used when available.
 
-```go
-func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailableTask) *AnalysisResult {
-	// Try LLM analysis first if available
-	if a.llmClient != nil {
-		llmResult, err := a.analyzeWithLLM(task)
-		if err == nil {
-			log.Printf("Successfully analyzed ticket with LLM")
-			return llmResult
-		}
-		
-		log.Printf("LLM analysis failed: %v, falling back to basic analysis", err)
-	}
-	
-	// Fallback to basic analysis
-	return a.performBasicAnalysis(task)
-}
+#### LLM Processing Flow
+
+```mermaid
+flowchart TD
+    A[Receive Ticket Data] --> B[Create LLM Prompt]
+    B --> C{LLM Available?}
+    
+    C -->|Yes| D[Send Request to LLM]
+    C -->|No| E[Return Error]
+    
+    D --> F{Request Successful?}
+    F -->|Yes| G[Parse LLM Response]
+    F -->|No| H[Handle Error]
+    
+    G --> I[Extract JSON Data]
+    I --> J[Validate Response]
+    J --> K[Create Analysis Result]
+    
+    subgraph "Prompt Creation"
+        B1[Format Ticket Data] --> B2[Add Instructions]
+        B2 --> B3[Define Analysis Structure]
+    end
+    
+    subgraph "Response Processing"
+        G1[Extract JSON] --> G2[Parse Dynamic Fields]
+        G2 --> G3[Map to Response Structure]
+    end
+    
+    K --> L[Return Analysis Result]
 ```
 
-#### LLM Analysis
+The LLM integration process consists of the following key steps:
 
-```go
-func (a *InformationGatheringAgent) analyzeWithLLM(task *models.TicketAvailableTask) (*AnalysisResult, error) {
-	// Create a prompt for the LLM
-	prompt := a.createLLMPrompt(task)
-	
-	// Call the LLM for completion
-	response, err := a.llmClient.Complete(context.Background(), prompt)
-	if err != nil {
-		return nil, fmt.Errorf("LLM completion failed: %w", err)
-	}
-	
-	// Parse the LLM response
-	result, err := a.parseLLMResponse(response)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
-	}
-	
-	// Mark as LLM-generated
-	result.LLMUsed = true
-	
-	return result, nil
-}
-```
+1. **Prompt Creation**:
+   - Formats extracted ticket data into a comprehensive prompt for the LLM
+   - Defines the desired analysis structure in the prompt itself
+   - Provides context about the ticket type, priority, and content
+   - The prompt determines what fields the LLM should analyze, not the agent code
 
-The LLM analysis process involves:
+2. **LLM Communication**:
+   - Manages API calls to the configured LLM provider (OpenAI)
+   - Handles authentication and request formatting
+   - Sets appropriate parameters (temperature, max tokens, etc.)
 
-1. **Creating a Prompt**: Generating a structured prompt with ticket information
-2. **Calling the LLM**: Sending the prompt to the LLM via langchain-go
-3. **Parsing the Response**: Converting the LLM's response into a structured AnalysisResult
+3. **Response Processing**:
+   - Parses the LLM's JSON-formatted responses into structured data
+   - Uses flexible parsing to handle the dynamic structure defined by the prompt
+   - Passes through the LLM's analysis without imposing rigid field requirements
 
-```go
-func (a *InformationGatheringAgent) createLLMPrompt(task *models.TicketAvailableTask) string {
-	// Build a structured prompt with ticket details
-	// Include instructions for JSON response format
-	// ...
-}
+4. **Error Handling**:
+   - Implements timeout mechanisms to prevent blocking operations
+   - Provides detailed error logging for troubleshooting
+   - Returns appropriate error messages when LLM services are unavailable
 
-func (a *InformationGatheringAgent) parseLLMResponse(response string) (*AnalysisResult, error) {
-	// Extract JSON from response
-	// Parse into structured fields
-	// Handle potential parsing errors
-	// ...
-}
-```
+The LLM integration is configured through environment variables and the Viper-based configuration system, allowing for flexible customization of the LLM provider, model, and parameters. The agent is designed to always use LLM analysis when available, with no fallback to static analysis.
 
-Helper functions for handling LLM responses:
+### 7. Analysis Result Structure
 
-```go
-func extractJSON(text string) (string, error) {
-	// Find JSON in text and validate
-	// ...
-}
+The analysis result structure is dynamically defined by the LLM prompt rather than being rigidly defined in the agent code. This flexible approach allows the prompt to be updated independently of the code, enabling rapid iteration and customization of the analysis without requiring code changes.
 
-func normalizeRiskLevel(level string) string {
-	// Normalize different risk level terms to standard values
-	// ...
-}
+#### Prompt-Driven Structure
 
-func normalizePriority(priority string) string {
-	// Normalize different priority terms to standard values
-	// ...
-}
-```
+The LLM prompt defines what analysis fields should be included, such as:
 
-### 7. Fallback Basic Analysis
+- Key themes and topics
+- Risk assessment
+- Priority recommendations
+- Technical analysis
+- Business impact
+- Next steps
+- Metadata suggestions
 
-```go
-func (a *InformationGatheringAgent) performBasicAnalysis(task *models.TicketAvailableTask) *AnalysisResult {
-	// Implement keyword matching for themes
-	// Determine risk level and priority based on metadata
-	// Generate appropriate suggestions
-	// ...
-}
-```
+#### Benefits of Flexible Structure
 
-The basic analysis provides a simpler but still useful analysis when LLM is unavailable, ensuring the system remains functional in all situations.
+- **Adaptability**: Analysis can be tailored to different ticket types or organizational needs
+- **Maintainability**: Changes to analysis requirements don't require code changes
+- **Extensibility**: New analysis fields can be added by updating the prompt
+- **Simplicity**: Agent code remains focused on core functionality rather than specific field handling
+
+This approach ensures that the InformationGatheringAgent can provide comprehensive, actionable information while remaining flexible and easy to maintain.
 
 ### 8. Summary Generation
 
-```go
-func (a *InformationGatheringAgent) generateSummary(task *models.TicketAvailableTask, analysis *AnalysisResult) string {
-	// Create a formatted summary with key findings
-	// Include all relevant sections based on available data
-	// Add appropriate footer based on analysis method
-	// ...
-}
-```
+The final step in the information gathering process is generating a comprehensive summary of the analysis, which is entirely driven by the LLM.
 
-This function generates a well-formatted summary of the analysis results in a format suitable for posting as a Jira comment.
+#### LLM-Driven Summary Generation
 
-### 9. Helper Functions
+- **Dynamic Content Generation**:
+  - The LLM generates the entire summary based on the ticket data
+  - No static templates or hardcoded formatting rules are used
+  - The summary format and content are defined by the LLM prompt
 
-```go
-func contains(slice []string, item string) bool {
-	return slices.Contains(slice, item)
-}
+- **Intelligent Information Synthesis**:
+  - The LLM combines ticket information with its analysis
+  - It prioritizes the most relevant information for the specific ticket type
+  - It adapts the summary style based on the ticket's complexity and importance
 
-func capitalize(s string) string {
-	if s == "" {
-		return ""
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
+- **Customizable Through Prompts**:
+  - Summary style and content can be adjusted by modifying the LLM prompt
+  - No code changes required to alter summary format or included information
+  - Organization-specific terminology and formatting can be incorporated
 
-func stringPtr(s string) *string {
-	return &s
-}
-```
+- **Consistent Structure with Flexible Content**:
+  - Maintains a recognizable structure for easy reading
+  - Adapts content based on ticket characteristics
+  - Ensures all critical information is included while avoiding unnecessary details
 
-These helper functions provide common utilities needed throughout the implementation.
+This LLM-driven approach ensures that summaries are both comprehensive and tailored to each specific ticket, without requiring complex template management or hardcoded formatting rules in the agent code.
 
-## LLM Integration Details
+## Conclusion
 
-### 1. LLM Client
+The InformationGatheringAgent has been refactored to be a pure information summarizer that works in conjunction with the JiraRetrievalAgent. It receives ticket information, analyzes it using LLM technology, and returns structured insights without any direct interaction with the Jira API.
 
-The LLM integration is implemented via a dedicated package:
+### Key Design Principles
 
-```go
-package llm
+1. **Separation of Concerns**:
+   - The agent focuses solely on information analysis
+   - All Jira API interactions are handled by the JiraRetrievalAgent
+   - Clean boundaries between agent responsibilities
 
-import (
-	"context"
-	"time"
-	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/openai"
-)
+2. **LLM-Powered Analysis**:
+   - **Always** uses LLM for analysis when available
+   - No fallback to static analysis methods
+   - Provides intelligent, context-aware insights
 
-// LLMClient defines the interface for interacting with LLM services
-type LLMClient interface {
-	Complete(ctx context.Context, prompt string) (string, error)
-}
+3. **Robust Data Extraction**:
+   - Handles complex nested JSON structures from Jira webhooks
+   - Supports multiple message formats from the A2A protocol
+   - Implements resilient parsing strategies
 
-// Client implements the LLMClient interface using langchain-go
-type Client struct {
-	llm       llms.LLM
-	maxTokens int
-	timeout   time.Duration
-}
-```
+4. **Structured Data Flow**:
+   - Maintains clear data structures for input and output
+   - Ensures compatibility with the A2A framework
+   - Provides consistent response formats
 
-The LLM client provides a clean abstraction over langchain-go:
+5. **Configurable Behavior**:
+   - Uses the Viper-based configuration system
+   - Supports flexible deployment options
+   - Enables easy customization of LLM parameters
 
-```go
-func NewClient(cfg *config.Config) (LLMClient, error) {
-	var llmModel llms.LLM
-	var err error
+This architecture allows for independent scaling and deployment of the agents, making the system more maintainable and adaptable to changing requirements. The refactoring ensures that the InformationGatheringAgent can focus on its core responsibility of providing intelligent analysis without being coupled to Jira-specific implementation details.
 
-	// Select LLM provider based on configuration
-	switch cfg.LLMProvider {
-	case "openai":
-		llmModel, err = openai.New(
-			openai.WithToken(cfg.LLMAPIKey),
-			openai.WithModel(cfg.LLMModel),
-		)
-	case "azure":
-		llmModel, err = openai.New(
-			openai.WithToken(cfg.LLMAPIKey),
-			openai.WithModel(cfg.LLMModel),
-			openai.WithBaseURL(cfg.LLMServiceURL),
-		)
-	default:
-		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.LLMProvider)
-	}
+## LLM Integration
 
-	// ...
+The InformationGatheringAgent integrates with Language Model services through a dedicated LLM client package. This integration:
 
-	return &Client{
-		llm:       llmModel,
-		maxTokens: cfg.LLMMaxTokens,
-		timeout:   time.Duration(cfg.LLMTimeout) * time.Second,
-	}, nil
-}
+### Key Components
 
-func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
-	// Create a context with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
+1. **LLM Client Interface**:
+   - Provides a clean abstraction for LLM interactions
+   - Supports different LLM providers through langchain-go
+   - Handles context management and timeout controls
 
-	// Call the LLM for completion via langchain-go
-	completion, err := c.llm.Call(timeoutCtx, prompt, llms.WithMaxTokens(c.maxTokens))
-	if err != nil {
-		return "", fmt.Errorf("LLM call failed: %w", err)
-	}
+2. **OpenAI Integration**:
+   - Primary integration with OpenAI's models
+   - Configurable model selection (e.g., GPT-4, GPT-3.5)
+   - Parameter tuning for temperature, max tokens, etc.
 
-	return completion, nil
-}
-```
+3. **Prompt Engineering**:
+   - Structured prompts for consistent LLM responses
+   - JSON response formatting for reliable parsing
+   - Context-aware prompting with ticket details
 
-### 2. LLM Configuration
+4. **Error Handling**:
+   - Graceful degradation when LLM services are unavailable
+   - Timeout management to prevent blocking operations
+   - Response validation to ensure quality analysis
 
-LLM configuration is managed via the config package:
+## Deployment
 
-```go
-type Config struct {
-	// ... existing fields
-	
-	// LLM configuration
-	LLMEnabled     bool
-	LLMProvider    string // "openai", "azure", "anthropic"
-	LLMModel       string
-	LLMAPIKey      string
-	LLMServiceURL  string
-	LLMMaxTokens   int
-	LLMTimeout     int // in seconds
-	LLMTemperature float64
-}
-```
+The InformationGatheringAgent is designed to be deployed as a standalone service that communicates with other agents through the A2A protocol. The deployment process is straightforward:
 
-Configuration is loaded from environment variables:
+1. **Configuration Setup**:
+   - Set environment variables or create a `.env` file with the required configuration
+   - Ensure LLM API keys are properly configured if LLM analysis is enabled
 
-```
-# LLM configuration
-LLM_ENABLED=true          # Set to true to enable LLM integration
-LLM_PROVIDER=openai       # openai or azure
-LLM_MODEL=gpt-4           # Or other model name
-LLM_API_KEY=your-api-key
-LLM_SERVICE_URL=          # Only needed for Azure OpenAI
-LLM_MAX_TOKENS=4000
-LLM_TIMEOUT=30            # Timeout in seconds
-LLM_TEMPERATURE=0.0       # Lower values make output more deterministic
-```
+2. **Build and Run**:
+   - Build the agent using the provided Makefile
+   - Run the binary with appropriate flags
 
-## Example Workflow
+3. **Integration Testing**:
+   - Verify communication with the JiraRetrievalAgent
+   - Test the analysis capabilities with sample tickets
 
-### 1. Receiving a Task
+4. **Monitoring**:
+   - Monitor the agent's logs for any issues
+   - Track performance metrics for LLM calls and analysis time
 
-The agent receives a task with the following data:
+## Troubleshooting
 
-```json
-{
-  "ticketId": "PROJ-123",
-  "summary": "System crashes when processing large files",
-  "metadata": {
-    "priority": "high",
-    "reporter": "Alice Johnson",
-    "event": "created",
-    "issueType": "bug",
-    "components": "file-processor"
-  }
-}
-```
+### Common Issues
 
-### 2. Sending to LLM
+1. **Data Extraction Failures**:
+   - Check the format of messages sent by the JiraRetrievalAgent
+   - Verify that all required fields are present in the message
+   - Enable debug logging for detailed information
 
-The agent creates a prompt for the LLM:
+2. **LLM Integration Issues**:
+   - Verify API keys and configuration
+   - Check network connectivity to the LLM provider
+   - Review LLM response format and error messages
 
-```
-You are an expert in analyzing Jira tickets and providing insights. 
-Please analyze the following Jira ticket information:
+3. **Performance Considerations**:
+   - LLM calls may introduce latency
+   - Consider caching strategies for similar tickets
+   - Monitor token usage for cost optimization
 
-Ticket ID: PROJ-123
-Summary: System crashes when processing large files
-Priority: high
-Reporter: Alice Johnson
-Issue Type: bug
-Components: file-processor
+## Testing
 
-Please provide a comprehensive analysis in JSON format with the following fields:
-{
-  "keyThemes": ["theme1", "theme2", ...],
-  "riskLevel": "high|medium|low",
-  "priority": "high|medium|low",
-  "suggestion": "Your main suggestion for handling this ticket",
-  "requirements": ["requirement1", "requirement2", ...],
-  "technicalAnalysis": "Detailed technical analysis of the issue",
-  "businessImpact": "Impact on business operations",
-  "nextSteps": "Recommended next steps for handling this ticket",
-  "recommendedPriority": "high|medium|low",
-  "recommendedComponents": ["component1", "component2", ...],
-  "recommendedLabels": ["label1", "label2", ...]
-}
+Testing the InformationGatheringAgent involves several approaches:
 
-Ensure your analysis is concise but comprehensive, covering both technical and business aspects.
-```
+1. **Unit Testing**:
+   - Test data extraction from different message formats
+   - Verify LLM prompt generation
+   - Validate response parsing logic
 
-### 3. LLM Response
+2. **Integration Testing**:
+   - Test communication with the JiraRetrievalAgent
+   - Verify end-to-end workflow with mock LLM responses
+   - Test error handling and recovery mechanisms
 
-The LLM returns a structured response:
+3. **LLM Integration Testing**:
+   - Test with actual LLM services (using test API keys)
+   - Verify prompt effectiveness with different ticket types
+   - Measure response quality and consistency
 
-```json
-{
-  "keyThemes": ["crash", "performance", "file processing", "stability"],
-  "riskLevel": "high",
-  "priority": "high",
-  "suggestion": "This issue requires immediate attention as it impacts core functionality. Investigate memory management in the file-processor component.",
-  "requirements": [
-    "Reproduce the crash with large files",
-    "Analyze memory usage during file processing",
-    "Check for memory leaks",
-    "Review error handling in file-processor component",
-    "Implement proper resource cleanup"
-  ],
-  "technicalAnalysis": "The system crash suggests a potential memory management issue or resource exhaustion when handling large files. This could be due to inefficient streaming, buffer overflows, or lack of proper resource cleanup.",
-  "businessImpact": "This issue affects users working with large files, potentially causing data loss and workflow disruptions. It may also lead to user frustration and decreased trust in the system.",
-  "nextSteps": "Assign to a senior developer familiar with the file-processor component. Set up monitoring to track memory usage during file processing. Prioritize this fix in the current sprint.",
-  "recommendedPriority": "high",
-  "recommendedComponents": ["file-processor", "memory-management", "error-handling"],
-  "recommendedLabels": ["crash", "performance", "bug", "memory"]
-}
-```
+
+## Workflow Example
+
+The InformationGatheringAgent follows this typical workflow when processing a ticket:
+
+1. **Receive Ticket Data**:
+   - JiraRetrievalAgent sends ticket information (ID, summary, description, metadata)
+   - Information is received as a structured message via the A2A protocol
+
+2. **Process and Analyze**:
+   - Extract relevant data from the message
+   - Format a comprehensive prompt for the LLM
+   - Send the prompt to the LLM service
+   - Parse the structured response from the LLM
+
+3. **Generate Results**:
+   - Create a comprehensive analysis with key insights
+   - Format the results as a structured InfoGatheredTask
+   - Return the analysis to the JiraRetrievalAgent
+
+This workflow ensures a clean separation of concerns, with the InformationGatheringAgent focusing solely on information analysis while the JiraRetrievalAgent handles all Jira API interactions.
 
 ### 4. Generated Summary
 
@@ -653,7 +672,6 @@ Unit tests should be created for each component, particularly focusing on:
 
 - Prompt creation
 - Response parsing
-- Fallback analysis logic
 
 Example test for LLM analysis:
 
@@ -768,10 +786,6 @@ LLM_TIMEOUT=30             # Timeout in seconds
 LLM_TEMPERATURE=0.0        # Lower values = more deterministic responses
 ```
 
-## LLM Provider Options
-
-### 1. OpenAI
-
 Configuration for OpenAI:
 
 ```go
@@ -799,7 +813,6 @@ llmModel, err = openai.New(
     openai.WithToken(cfg.LLMAPIKey),
     openai.WithModel(cfg.LLMModel),
     openai.WithBaseURL(cfg.LLMServiceURL),
-    openai.WithAzure(),
 )
 ```
 
@@ -815,7 +828,6 @@ LLM_SERVICE_URL=https://your-resource.openai.azure.com
 
 1. **Error Handling**
    - Implement robust error handling for LLM failures
-   - Always provide a fallback mechanism for when LLM is unavailable
    - Log detailed error information for debugging
 
 2. **Performance**
@@ -863,6 +875,6 @@ The InformationGatheringAgent can be extended in several ways:
 
 ## Conclusion
 
-The InformationGatheringAgent with langchain-go integration provides intelligent analysis of Jira tickets using LLM technology. The implementation follows a robust design with fallback mechanisms, comprehensive error handling, and flexible configuration options.
+The InformationGatheringAgent with langchain-go integration provides intelligent analysis of Jira tickets using LLM technology. The implementation follows a robust design with comprehensive error handling, and flexible configuration options.
 
 By leveraging the power of LLMs through langchain-go, the agent can provide deep insights into tickets, saving time for developers and ensuring important aspects are not overlooked.

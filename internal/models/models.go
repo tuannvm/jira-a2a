@@ -2,16 +2,17 @@ package models
 
 // TicketAvailableTask represents the data structure for a "ticket-available" task
 type TicketAvailableTask struct {
-	TicketID string            `json:"ticketId"`
-	Summary  string            `json:"summary"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	TicketID    string            `json:"ticketId"`
+	Summary     string            `json:"summary"`
+	Description string            `json:"description,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // InfoGatheredTask represents the data structure for an "info-gathered" task
 type InfoGatheredTask struct {
 	TicketID        string            `json:"ticketId"`
 	CollectedFields map[string]string `json:"collectedFields"`
-	CommentURL      string            `json:"commentUrl"`
+	// No CommentURL as the InformationGatheringAgent doesn't interact with Jira API
 }
 
 // JiraTicket represents the data structure for a Jira ticket
