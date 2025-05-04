@@ -1,4 +1,4 @@
-.PHONY: build test clean run run-dev release-snapshot run-docker docker-compose-up docker-compose-down lint server jira-agent run-jira run-jira-dev run-both stop-both logs-both
+.PHONY: build test clean run run-dev release-snapshot run-docker docker-compose-up docker-compose-down lint server jira-agent run-jira run-jira-dev run-both stop-both logs-both stop
 
 # Variables
 BINARY_NAME=jira-a2a
@@ -77,13 +77,37 @@ logs-both:
 release-snapshot:
 	goreleaser release --snapshot --clean
 
-# Run the InfoGathering server using the built binary
-run: server
-	./$(SERVER_BINARY)
+# Run all agents using the built binaries
+run: build
+	@echo "Starting all agents..."
+	@mkdir -p logs
+	@echo "Starting InformationGatheringAgent..."
+	@./$(SERVER_BINARY) > logs/infogathering.log 2>&1 & echo $$! > .infogathering.pid
+	@echo "Starting JiraRetrievalAgent..."
+	@./$(JIRA_BINARY) > logs/jiraretrieval.log 2>&1 & echo $$! > .jiraretrieval.pid
+	@echo "All agents are running!"
+	@echo "InformationGatheringAgent logs: logs/infogathering.log"
+	@echo "JiraRetrievalAgent logs: logs/jiraretrieval.log"
+	@echo "Use 'make stop' to stop all agents"
 
 # Run the JiraRetrieval server using the built binary
 run-jira: jira-agent
 	./$(JIRA_BINARY)
+
+# Stop all agents
+stop:
+	@echo "Stopping all agents..."
+	@if [ -f .infogathering.pid ]; then \
+		echo "Stopping InformationGatheringAgent..."; \
+		kill `cat .infogathering.pid` 2>/dev/null || true; \
+		rm .infogathering.pid; \
+	fi
+	@if [ -f .jiraretrieval.pid ]; then \
+		echo "Stopping JiraRetrievalAgent..."; \
+		kill `cat .jiraretrieval.pid` 2>/dev/null || true; \
+		rm .jiraretrieval.pid; \
+	fi
+	@echo "All agents stopped!"
 
 # Run client target removed
 
