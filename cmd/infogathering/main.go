@@ -72,7 +72,7 @@ func main() {
 			URL:          stringPtr("https://example.com"),
 		},
 		Capabilities: server.AgentCapabilities{
-			Streaming:              false,
+			Streaming:              true,
 			StateTransitionHistory: true,
 		},
 		DefaultInputModes:  []string{"text"},

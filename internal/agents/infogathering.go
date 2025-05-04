@@ -58,9 +58,12 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	messageJSON, _ := json.Marshal(message)
 	log.Printf("Raw message: %s", string(messageJSON))
 
-	// Update status to processing
+	// Update status to processing with a message for better SSE support
 	log.Printf("Updating status to processing")
-	if err := handle.UpdateStatus(protocol.TaskState("processing"), nil); err != nil {
+	processingMsg := &protocol.Message{
+		Parts: []protocol.Part{protocol.NewTextPart("Processing task...")},
+	}
+	if err := handle.UpdateStatus(protocol.TaskState("processing"), processingMsg); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -78,15 +81,28 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	// The task should already contain all necessary ticket details provided by JiraRetrievalAgent
 	// No need to fetch ticket details from Jira API
 
-	// Update status to analyzing ticket
+	// Update status to analyzing ticket with a message for better SSE support
 	log.Printf("Updating status to analyzing_ticket")
-	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), nil); err != nil {
+	analyzingMsg := &protocol.Message{
+		Parts: []protocol.Part{protocol.NewTextPart(fmt.Sprintf("Analyzing ticket %s: %s...", task.TicketID, task.Summary))},
+	}
+	if err := handle.UpdateStatus(protocol.TaskState("analyzing_ticket"), analyzingMsg); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
 	// Analyze the ticket information
 	log.Printf("Analyzing ticket information")
 	analysis := a.analyzeTicketInfo(&task)
+
+	// Update status to generating summary with a message for better SSE support
+	log.Printf("Updating status to generating_summary")
+	generatingMsg := &protocol.Message{
+		Parts: []protocol.Part{protocol.NewTextPart("Generating summary...")},
+	}
+	if err := handle.UpdateStatus(protocol.TaskState("generating_summary"), generatingMsg); err != nil {
+		log.Printf("Warning: failed to update status to generating_summary: %v", err)
+		// Continue despite the error
+	}
 
 	// Generate a summary
 	log.Printf("Generating summary")

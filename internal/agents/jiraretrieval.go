@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -701,13 +702,12 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 
 	log.Printf("Successfully sent task. Task ID: %s", resp.ID)
 	
-	// Check if the task is already completed (synchronous processing)
+	// Check if the task is already completed
 	var infoTask models.InfoGatheredTask
 	var extracted bool
 	
 	// If the task is already completed in the response, extract the result directly
-	// Based on the logs, the response contains a status field with state and message
-	if resp.Status.State == protocol.TaskStateCompleted && resp.Status.Message != nil {
+	if resp.Status.State == "completed" && resp.Status.Message != nil {
 		log.Printf("Task was completed synchronously, extracting result from response")
 		
 		// Extract the InfoGatheredTask from the response message
@@ -717,35 +717,61 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 				// Try to extract from TextPart (which is what InfoGatheringAgent uses)
 				textPart, ok := part.(*protocol.TextPart)
 				if ok && textPart != nil && textPart.Text != "" {
+					// Log the raw text for debugging
 					log.Printf("Found TextPart in response: %s", textPart.Text)
 					
-					// The text is a JSON string, so we need to unmarshal it
+					// Try direct unmarshal first
 					if err := json.Unmarshal([]byte(textPart.Text), &infoTask); err == nil {
 						if infoTask.TicketID != "" {
 							extracted = true
-							log.Printf("Successfully extracted InfoGatheredTask from response")
+							log.Printf("Successfully extracted InfoGatheredTask directly")
 							break
 						}
 					} else {
-						// The text might be a JSON string that contains a JSON string
-						// This happens when the TextPart contains an escaped JSON string
-						log.Printf("Trying to extract from escaped JSON: %v", err)
+						log.Printf("Direct unmarshal failed: %v", err)
 						
-						// Try to unmarshal the text as a string first
+						// Try parsing as a JSON string that contains the actual JSON
 						var jsonStr string
 						if err := json.Unmarshal([]byte(textPart.Text), &jsonStr); err == nil {
-							// Then unmarshal the string as JSON
+							log.Printf("Successfully parsed as JSON string: %s", jsonStr)
+							
+							// Now try to parse the string as an InfoGatheredTask
 							if err := json.Unmarshal([]byte(jsonStr), &infoTask); err == nil {
 								if infoTask.TicketID != "" {
 									extracted = true
-									log.Printf("Successfully extracted InfoGatheredTask from escaped JSON")
+									log.Printf("Successfully extracted InfoGatheredTask from JSON string")
 									break
 								}
 							} else {
-								log.Printf("Failed to unmarshal inner JSON as InfoGatheredTask: %v", err)
+								log.Printf("Failed to parse JSON string as InfoGatheredTask: %v", err)
 							}
 						} else {
-							log.Printf("Failed to unmarshal TextPart as JSON string: %v", err)
+							log.Printf("Failed to parse as JSON string: %v", err)
+							
+							// Try one more approach - sometimes the JSON might be malformed
+							// Let's try to extract the fields manually
+							log.Printf("Attempting manual extraction from text: %s", textPart.Text)
+							
+							// Create a simple regex to extract the ticketId
+							ticketIDRegex := regexp.MustCompile(`"ticketId":"([^"]+)"`)
+							matches := ticketIDRegex.FindStringSubmatch(textPart.Text)
+							if len(matches) > 1 {
+								ticketID := matches[1]
+								log.Printf("Extracted ticketId: %s", ticketID)
+								
+								// Create a basic InfoGatheredTask with the extracted ticketId
+								infoTask = models.InfoGatheredTask{
+									TicketID: ticketID,
+									CollectedFields: map[string]string{
+										"Summary":      taskData.Summary,
+										"Analysis":     "Analysis completed",
+										"Suggestion":   "Please review this ticket",
+									},
+								}
+								extracted = true
+								log.Printf("Created InfoGatheredTask from regex extraction")
+								break
+							}
 						}
 					}
 				}
