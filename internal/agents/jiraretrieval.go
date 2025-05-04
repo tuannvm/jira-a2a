@@ -140,8 +140,12 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 		Changes:     string(rawChanges),
 		Metadata:    webReq.CustomFields,
 	}
-	// Use DataPart literal
-	msg := protocol.Message{Parts: []protocol.Part{&protocol.DataPart{Data: taskData}}}
+	// Send task data as DataPart with explicit type and metadata
+	msg := protocol.Message{Parts: []protocol.Part{&protocol.DataPart{
+		Type:     "data",
+		Data:     taskData,
+		Metadata: map[string]interface{}{"content-type": "application/json"},
+	}}}
 	log.Infof("Sending TicketAvailableTask for ticket %s to InformationGatheringAgent", ticket.Key)
 	resp, err := j.infoAgentClient.SendTasks(ctx, protocol.SendTaskParams{Message: msg})
 	if err != nil {
