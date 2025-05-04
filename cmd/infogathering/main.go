@@ -12,7 +12,6 @@ import (
 	"github.com/tuannvm/jira-a2a/internal/config"
 )
 
-
 func main() {
 	// Check command line arguments
 	if len(os.Args) > 1 && os.Args[1] == "client" {
@@ -30,14 +29,11 @@ func main() {
 		return
 	}
 
+	// Set agent name for configuration
+	config.GetViper().Set("agent_name", config.InfoGatheringAgentName)
+	
 	// Create a new configuration
 	cfg := config.NewConfig()
-
-	// Ensure agent name is set correctly
-	cfg.AgentName = config.InfoGatheringAgentName
-	
-	// Update agent URL to match the port
-	cfg.AgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, cfg.ServerPort)
 	
 	// Log the configuration
 	log.Printf("InformationGatheringAgent configured with port: %d", cfg.ServerPort)

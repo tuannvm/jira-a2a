@@ -12,7 +12,6 @@ import (
 	"github.com/tuannvm/jira-a2a/internal/config"
 )
 
-
 func main() {
 	// Check command line arguments
 	if len(os.Args) > 1 && os.Args[1] == "client" {
@@ -26,14 +25,11 @@ func main() {
 		return
 	}
 
+	// Set agent name for configuration
+	config.GetViper().Set("agent_name", config.JiraRetrievalAgentName)
+	
 	// Create a new configuration
 	cfg := config.NewConfig()
-	
-	// Override agent name for JiraRetrievalAgent
-	cfg.AgentName = config.JiraRetrievalAgentName
-	
-	// Update agent URL to match the port
-	cfg.AgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, cfg.ServerPort)
 	
 	// Log the configuration
 	log.Printf("JiraRetrievalAgent configured with port: %d", cfg.ServerPort)
@@ -44,7 +40,7 @@ func main() {
 	// Print usage information
 	fmt.Println("Starting JiraRetrievalAgent server...")
 	fmt.Printf("Server will listen on %s:%d\n", cfg.ServerHost, cfg.ServerPort)
-	fmt.Printf("Webhook endpoint: http://%s:%d/webhook\n", cfg.ServerHost, cfg.ServerPort + 3)
+	fmt.Printf("Webhook endpoint: http://%s:%d/webhook\n", cfg.ServerHost, cfg.WebhookPort)
 	fmt.Println("To run the client example, use: make test-client")
 
 	// Create a context that will be canceled on SIGINT or SIGTERM

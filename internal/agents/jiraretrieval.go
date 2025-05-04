@@ -40,7 +40,7 @@ func NewJiraRetrievalAgent(cfg *config.Config) *JiraRetrievalAgent {
 	// If we're running the JiraRetrievalAgent, we need to connect to the InfoGatheringAgent
 	if cfg.AgentName == config.JiraRetrievalAgentName {
 		// Construct the URL for the InfoGatheringAgent using the default port from config
-		infoAgentURL = fmt.Sprintf("http://%s:%s", cfg.ServerHost, config.DefaultInfoGatheringPort)
+		infoAgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, config.DefaultInfoGatheringPort)
 	}
 
 	var infoAgentClient *client.A2AClient
