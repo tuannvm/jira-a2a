@@ -38,9 +38,16 @@ func main() {
 	cfg := config.NewConfig()
 	
 	// Override agent name for JiraRetrievalAgent
-	cfg.AgentName = "JiraRetrievalAgent"
-	// Note: ServerPort is already set from environment variable SERVER_PORT
+	cfg.AgentName = config.JiraRetrievalAgentName
+	
+	// Ensure the agent name is set correctly
+	// The port will be set based on the agent name in the config package
+	
+	// Update agent URL to match the port
 	cfg.AgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, cfg.ServerPort)
+	
+	// Log the configuration
+	log.Printf("JiraRetrievalAgent configured with port: %d", cfg.ServerPort)
 
 	// Create a new JiraRetrievalAgent
 	agent := agents.NewJiraRetrievalAgent(cfg)

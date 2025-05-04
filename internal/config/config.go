@@ -1,11 +1,27 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
 
 	"github.com/joho/godotenv"
+)
+
+// Default port constants
+const (
+	DefaultJiraRetrievalPort = "8080"
+	DefaultInfoGatheringPort = "8081"
+	DefaultCopilotPort      = "8082"
+	DefaultUnknownPort      = "8080"
+)
+
+// Agent name constants
+const (
+	JiraRetrievalAgentName    = "JiraRetrievalAgent"
+	InfoGatheringAgentName    = "InformationGatheringAgent"
+	CopilotAgentName          = "CopilotAgent"
 )
 
 // Config holds the application configuration
@@ -65,22 +81,45 @@ func init() {
 
 // NewConfig creates a new configuration with values from environment variables
 func NewConfig() *Config {
-	port, _ := strconv.Atoi(getEnvOrDefault("SERVER_PORT", "8080"))
+	// Get the agent name first
+	agentName := getEnvOrDefault("AGENT_NAME", "InformationGatheringAgent")
+	
+	// Set default port based on agent name
+	var defaultPort string
+	switch agentName {
+	case JiraRetrievalAgentName:
+		defaultPort = DefaultJiraRetrievalPort
+	case InfoGatheringAgentName:
+		defaultPort = DefaultInfoGatheringPort
+	case CopilotAgentName:
+		defaultPort = DefaultCopilotPort
+	default:
+		// Default for unknown agents
+		defaultPort = DefaultUnknownPort
+	}
+	
+	// Log the agent name and default port for debugging
+	log.Printf("Agent: %s, Default port: %s", agentName, defaultPort)
+	
+	port, _ := strconv.Atoi(getEnvOrDefault("SERVER_PORT", defaultPort))
 	
 	llmMaxTokens, _ := strconv.Atoi(getEnvOrDefault("LLM_MAX_TOKENS", "4000"))
 	llmTimeout, _ := strconv.Atoi(getEnvOrDefault("LLM_TIMEOUT", "30"))
 	llmEnabled, _ := strconv.ParseBool(getEnvOrDefault("LLM_ENABLED", "false"))
 	llmTemperature, _ := strconv.ParseFloat(getEnvOrDefault("LLM_TEMPERATURE", "0.0"), 64)
 
+	// Create default agent URL with the correct port
+	defaultAgentURL := fmt.Sprintf("http://localhost:%d", port)
+	
 	return &Config{
 		// Server configuration
 		ServerPort: port,
 		ServerHost: getEnvOrDefault("SERVER_HOST", "localhost"),
 
 		// Agent configuration
-		AgentName:    getEnvOrDefault("AGENT_NAME", "InformationGatheringAgent"),
+		AgentName:    agentName,
 		AgentVersion: getEnvOrDefault("AGENT_VERSION", "1.0.0"),
-		AgentURL:     getEnvOrDefault("AGENT_URL", "http://localhost:8080"),
+		AgentURL:     getEnvOrDefault("AGENT_URL", defaultAgentURL),
 
 		// Jira configuration
 		JiraBaseURL:  getEnvOrDefault("JIRA_BASE_URL", "https://your-jira-instance.atlassian.net"),

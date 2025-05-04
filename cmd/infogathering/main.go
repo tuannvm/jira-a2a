@@ -41,6 +41,17 @@ func main() {
 	// Create a new configuration
 	cfg := config.NewConfig()
 
+	// Ensure agent name is set correctly
+	cfg.AgentName = config.InfoGatheringAgentName
+	
+	// The port will be set based on the agent name in the config package
+	
+	// Update agent URL to match the port
+	cfg.AgentURL = fmt.Sprintf("http://%s:%d", cfg.ServerHost, cfg.ServerPort)
+	
+	// Log the configuration
+	log.Printf("InformationGatheringAgent configured with port: %d", cfg.ServerPort)
+
 	// Create a new InformationGatheringAgent
 	agent := agents.NewInformationGatheringAgent(cfg)
 
@@ -113,6 +124,9 @@ func main() {
 	fmt.Println("Starting InformationGatheringAgent server...")
 	fmt.Printf("Server will listen on %s:%d\n", cfg.ServerHost, cfg.ServerPort)
 	fmt.Println("To run the client example, use: make test-client")
+	
+	// Log the actual port being used
+	log.Printf("InformationGatheringAgent will use port: %d", cfg.ServerPort)
 
 	// Create a context that will be canceled on SIGINT or SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

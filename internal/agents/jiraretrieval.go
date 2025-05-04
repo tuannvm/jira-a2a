@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 
@@ -38,9 +37,11 @@ func NewJiraRetrievalAgent(cfg *config.Config) *JiraRetrievalAgent {
 
 	// Create client to communicate with InfoGatheringAgent
 	infoAgentURL := cfg.AgentURL
-	if cfg.ServerPort == 8081 {
-		// If we're running on the JiraRetrievalAgent port, adjust the URL for the InformationGatheringAgent
-		infoAgentURL = fmt.Sprintf("http://%s:8080", cfg.ServerHost)
+	
+	// If we're running the JiraRetrievalAgent, we need to connect to the InfoGatheringAgent
+	if cfg.AgentName == config.JiraRetrievalAgentName {
+		// Construct the URL for the InfoGatheringAgent using the default port from config
+		infoAgentURL = fmt.Sprintf("http://%s:%s", cfg.ServerHost, config.DefaultInfoGatheringPort)
 	}
 
 	var infoAgentClient *client.A2AClient
@@ -319,82 +320,61 @@ type WebhookRequest struct {
 
 // RegisterWebhookHandler registers the webhook handler with the server
 func (j *JiraRetrievalAgent) RegisterWebhookHandler(srv *server.A2AServer) error {
-	// Try to determine if the server supports the standard A2A HTTP handler registration
-	// that automatically applies authentication
-	
-	// First, try the official method based on the documentation
-	handleFuncMethod := reflect.ValueOf(srv).MethodByName("HandleFunc")
-	if handleFuncMethod.IsValid() && !handleFuncMethod.IsNil() {
-		log.Printf("Using srv.HandleFunc method to register webhook handler")
-		args := []reflect.Value{reflect.ValueOf("/webhook"), reflect.ValueOf(j.HandleWebhook)}
-		results := handleFuncMethod.Call(args)
-		
-		// Check for error return value if it exists
-		if len(results) > 0 && !results[0].IsNil() {
-			if err, ok := results[0].Interface().(error); ok {
-				return fmt.Errorf("failed to register webhook handler: %w", err)
-			}
-		}
-		
-		log.Printf("Successfully registered webhook handler with A2A server")
-		logWebhookRegistrationSuccess(j.cfg)
-		return nil
+	// Get the A2A server's http.Handler
+	baseHandler := srv.Handler()
+	if baseHandler == nil {
+		return fmt.Errorf("A2A server returned nil handler")
 	}
 	
-	// If we can't find the standard HandleFunc method, try to find a Handler function
-	// that we can use to register our handler
-	handlerMethod := reflect.ValueOf(srv).MethodByName("Handler")
-	if handlerMethod.IsValid() && !handlerMethod.IsNil() {
-		log.Printf("Server has Handler method, but we need to determine how to register our handler")
-		
-		// Try to find a method to register our handler with the server's handler
-		// This is implementation-specific and might require more investigation
-	}
+	log.Printf("Integrating webhook handler with A2A server")
 	
-	// If we still can't register with the server, create our own HTTP handler with authentication
-	log.Printf("Could not register webhook handler with A2A server, creating custom handler")
-	
-	// Get the server's auth provider if possible
+	// Create an auth provider based on the configuration
 	var authProvider auth.Provider
-	getAuthProviderMethod := reflect.ValueOf(srv).MethodByName("AuthProvider")
-	if getAuthProviderMethod.IsValid() && !getAuthProviderMethod.IsNil() {
-		// Try to get the auth provider from the server
-		results := getAuthProviderMethod.Call([]reflect.Value{})
-		if len(results) > 0 && !results[0].IsNil() {
-			if provider, ok := results[0].Interface().(auth.Provider); ok {
-				log.Printf("Using server's auth provider for webhook handler")
-				authProvider = provider
-			}
+	if j.cfg.AuthType == "jwt" {
+		authProvider = auth.NewJWTAuthProvider(
+			[]byte(j.cfg.JWTSecret),
+			"", // audience
+			"", // issuer
+			24*time.Hour, // expiration
+		)
+		log.Printf("Created JWT auth provider for webhook handler")
+	} else if j.cfg.AuthType == "apikey" {
+		apiKeys := map[string]string{
+			j.cfg.APIKey: "user",
 		}
+		authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "X-API-Key")
+		log.Printf("Created API key auth provider for webhook handler")
+	} else {
+		log.Printf("No authentication configured for webhook handler")
 	}
 	
-	// If we couldn't get the server's auth provider, create our own based on the config
-	if authProvider == nil {
-		log.Printf("Creating new auth provider for webhook handler based on configuration")
-		if j.cfg.AuthType == "jwt" {
-			authProvider = auth.NewJWTAuthProvider(
-				[]byte(j.cfg.JWTSecret),
-				"", // audience
-				"", // issuer
-				24*time.Hour, // expiration
-			)
-			log.Printf("Created JWT auth provider for webhook handler")
-		} else if j.cfg.AuthType == "apikey" {
-			apiKeys := map[string]string{
-				j.cfg.APIKey: "user",
-			}
-			authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "X-API-Key")
-			log.Printf("Created API key auth provider for webhook handler")
-		} else {
-			log.Printf("No authentication configured for webhook handler")
-		}
+	// Create a new ServeMux to handle both the A2A server and our webhook handler
+	mux := http.NewServeMux()
+	
+	// Add the webhook handler with authentication if configured
+	var webhookHandler http.Handler = http.HandlerFunc(j.HandleWebhook)
+	if authProvider != nil {
+		log.Printf("Using authentication for webhook endpoint")
+		webhookHandler = AuthMiddleware(authProvider, webhookHandler)
 	}
 	
-	// Register the webhook handler with our custom HTTP server that uses the auth provider
-	err := j.registerFallbackWebhookHandler(authProvider)
-	if err != nil {
-		return fmt.Errorf("failed to register fallback webhook handler: %w", err)
-	}
+	// Register the webhook handler at /webhook path
+	mux.Handle("/webhook", webhookHandler)
+	
+	// Register the A2A server handler for all other paths
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only handle requests that aren't for /webhook
+		if r.URL.Path != "/webhook" {
+			baseHandler.ServeHTTP(w, r)
+		}
+	}))
+	
+	// Store the combined handler in the JiraRetrievalAgent
+	j.httpServer = mux
+	
+	// Log success
+	log.Printf("Successfully integrated webhook handler with A2A server")
+	logWebhookRegistrationSuccess(j.cfg)
 	
 	return nil
 }
@@ -441,27 +421,31 @@ func (j *JiraRetrievalAgent) registerFallbackWebhookHandler(authProvider auth.Pr
 		router := http.NewServeMux()
 		router.Handle("/webhook", handler)
 		
+		// This function is now deprecated as we're using the integrated webhook handler
+		// But we'll keep it for backward compatibility
+		// Use a different port for the webhook server to avoid conflict with the A2A server
+		webhookPort := j.cfg.ServerPort + 3 // Use ServerPort + 3 as a convention for separate webhook servers
 		webhookServer := &http.Server{
-			Addr:    fmt.Sprintf(":%d", j.cfg.ServerPort),
+			Addr:    fmt.Sprintf(":%d", webhookPort),
 			Handler: router,
 		}
 		
 		// Log webhook endpoint information
-		log.Printf("Webhook endpoint available at: http://%s:%d/webhook", j.cfg.ServerHost, j.cfg.ServerPort)
+		log.Printf("Webhook endpoint available at: http://%s:%d/webhook", j.cfg.ServerHost, webhookPort)
 		
 		// Print test information with authentication header
 		if j.cfg.AuthType == "apikey" {
 			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"X-API-Key: %s\" http://%s:%d/webhook", 
-				j.cfg.APIKey, j.cfg.ServerHost, j.cfg.ServerPort)
+				j.cfg.APIKey, j.cfg.ServerHost, webhookPort)
 		} else if j.cfg.AuthType == "jwt" {
 			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"Authorization: Bearer YOUR_JWT_TOKEN\" http://%s:%d/webhook", 
-				j.cfg.ServerHost, j.cfg.ServerPort)
+				j.cfg.ServerHost, webhookPort)
 		} else {
 			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' http://%s:%d/webhook", 
-				j.cfg.ServerHost, j.cfg.ServerPort)
+				j.cfg.ServerHost, webhookPort)
 		}
 		
-		log.Printf("Starting webhook server on port %d", j.cfg.ServerPort)
+		log.Printf("Starting webhook server on port %d", webhookPort)
 		if err := webhookServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Webhook server error: %v", err)
 		}
