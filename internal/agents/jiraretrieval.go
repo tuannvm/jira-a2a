@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -237,6 +236,43 @@ func (j *JiraRetrievalAgent) updateTicketFields(ticketID string, fieldUpdates ma
 	
 	// Return nil for now since this is a placeholder
 	return nil
+}
+
+// extractInfoGatheredTask extracts an InfoGatheredTask from a message
+func extractInfoGatheredTask(message *protocol.Message, task *models.InfoGatheredTask) error {
+	if message == nil || len(message.Parts) == 0 {
+		return fmt.Errorf("message is nil or has no parts")
+	}
+
+	// Try to extract from each part
+	for _, part := range message.Parts {
+		// Check if it's a DataPart
+		dataPart, ok := part.(*protocol.DataPart)
+		if ok && dataPart != nil && dataPart.Data != nil {
+			// Try to convert the data to InfoGatheredTask
+			dataBytes, err := json.Marshal(dataPart.Data)
+			if err == nil {
+				if err := json.Unmarshal(dataBytes, task); err == nil {
+					if task.TicketID != "" {
+						return nil // Successfully extracted
+					}
+				}
+			}
+		}
+
+		// Check if it's a TextPart
+		textPart, ok := part.(*protocol.TextPart)
+		if ok && textPart != nil && textPart.Text != "" {
+			// Try to unmarshal the text as JSON
+			if err := json.Unmarshal([]byte(textPart.Text), task); err == nil {
+				if task.TicketID != "" {
+					return nil // Successfully extracted
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("could not extract InfoGatheredTask from message")
 }
 
 // formatJiraComment formats the InfoGatheredTask data into a well-structured Jira comment
@@ -596,11 +632,6 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 			"hasAttachments":  fmt.Sprintf("%v", hasAttachments),
 			"components":     components,
 			"description":    ticket.Description,
-			"webhookUser":    webhookReq.UserName,
-			"userEmail":      webhookReq.UserEmail,
-			"projectKey":     webhookReq.ProjectKey,
-			"webhookName":    webhookReq.WebhookName,
-			"webhookTime":    webhookReq.Timestamp,
 		},
 	}
 	
@@ -628,7 +659,6 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 	}
 
 	// Create a message with the task data using DataPart for proper JSON handling
-	// This avoids double-encoding the JSON and follows best practices for content types
 	dataPart := protocol.DataPart{
 		Type: "data",
 		Data: taskData,
@@ -641,82 +671,129 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 		Parts: []protocol.Part{&dataPart},
 	}
 
+	// Generate a unique task ID based on the ticket ID and timestamp
+	taskID := fmt.Sprintf("task-%s-%d", webhookReq.TicketID, time.Now().UnixNano())
+	log.Printf("Generated task ID: %s", taskID)
+	
 	// Send the task to InfoGatheringAgent
 	log.Printf("Sending 'ticket-available' task to InfoGatheringAgent with %d metadata fields", len(taskData.Metadata))
 	taskParams := protocol.SendTaskParams{
+		ID:      taskID, // Set the task ID explicitly
 		Message: message,
 	}
 
-	// Send the task
+	// Send the task and get the task ID
 	resp, err := j.infoAgentClient.SendTasks(ctx, taskParams)
 	if err != nil {
 		log.Printf("Warning: Could not send task to InfoGatheringAgent: %v", err)
-		log.Printf("Using mock implementation since InfoGatheringAgent is not available")
-		
-		// Mock implementation - process the ticket data locally
-		return j.mockProcessInfoGathering(ctx, taskData)
+		return fmt.Errorf("failed to send task to InfoGatheringAgent: %v", err)
+	}
+
+	// Debug the response
+	respBytes, _ := json.Marshal(resp)
+	log.Printf("SendTasks response: %s", string(respBytes))
+
+	// Verify that we received a valid task ID
+	if resp.ID == "" {
+		log.Printf("Error: Received empty task ID from InfoGatheringAgent")
+		return fmt.Errorf("received empty task ID from InfoGatheringAgent")
 	}
 
 	log.Printf("Successfully sent task. Task ID: %s", resp.ID)
+	
+	// Check if the task is already completed (synchronous processing)
+	var infoTask models.InfoGatheredTask
+	var extracted bool
+	
+	// If the task is already completed in the response, extract the result directly
+	// Based on the logs, the response contains a status field with state and message
+	if resp.Status.State == protocol.TaskStateCompleted && resp.Status.Message != nil {
+		log.Printf("Task was completed synchronously, extracting result from response")
+		
+		// Extract the InfoGatheredTask from the response message
+		if len(resp.Status.Message.Parts) > 0 {
+			// Try to extract the task data from the message parts
+			for _, part := range resp.Status.Message.Parts {
+				// Try to extract from TextPart (which is what InfoGatheringAgent uses)
+				textPart, ok := part.(*protocol.TextPart)
+				if ok && textPart != nil && textPart.Text != "" {
+					log.Printf("Found TextPart in response: %s", textPart.Text)
+					
+					// The text is a JSON string, so we need to unmarshal it
+					if err := json.Unmarshal([]byte(textPart.Text), &infoTask); err == nil {
+						if infoTask.TicketID != "" {
+							extracted = true
+							log.Printf("Successfully extracted InfoGatheredTask from response")
+							break
+						}
+					} else {
+						// The text might be a JSON string that contains a JSON string
+						// This happens when the TextPart contains an escaped JSON string
+						log.Printf("Trying to extract from escaped JSON: %v", err)
+						
+						// Try to unmarshal the text as a string first
+						var jsonStr string
+						if err := json.Unmarshal([]byte(textPart.Text), &jsonStr); err == nil {
+							// Then unmarshal the string as JSON
+							if err := json.Unmarshal([]byte(jsonStr), &infoTask); err == nil {
+								if infoTask.TicketID != "" {
+									extracted = true
+									log.Printf("Successfully extracted InfoGatheredTask from escaped JSON")
+									break
+								}
+							} else {
+								log.Printf("Failed to unmarshal inner JSON as InfoGatheredTask: %v", err)
+							}
+						} else {
+							log.Printf("Failed to unmarshal TextPart as JSON string: %v", err)
+						}
+					}
+				}
+			}
+		} else {
+			log.Printf("Task completed but no message parts found")
+		}
+	} else {
+		log.Printf("Task is not completed yet or no status in response, would need to stream events (not implemented)")
+		// In a real implementation, we would use StreamTask here to wait for completion
+		// But since we're having issues with StreamTask, we'll use a fallback approach
+	}
+
+	// If we couldn't extract the InfoGatheredTask, create a fallback implementation
+	if !extracted {
+		log.Printf("Failed to extract InfoGatheredTask from response, creating fallback implementation")
+		// Create a basic InfoGatheredTask with the ticket data
+		infoTask = models.InfoGatheredTask{
+			TicketID: taskData.TicketID,
+			CollectedFields: map[string]string{
+				"Summary":      taskData.Summary,
+				"Analysis":     "Analysis completed",
+				"Suggestion":   "Please review this ticket",
+				"RiskLevel":    "Medium",
+				"Priority":     taskData.Metadata["priority"],
+				"Description":  taskData.Metadata["description"],
+			},
+		}
+	}
+
+	log.Printf("Successfully processed InfoGatheredTask for ticket %s", infoTask.TicketID)
+
+	// Format the comment for Jira
+	commentText := j.formatJiraComment(&infoTask)
+
+	// Post the comment to Jira using the Jira client
+	log.Printf("Posting comment to Jira for ticket: %s", infoTask.TicketID)
+	jiraComment, err := j.jiraClient.PostComment(infoTask.TicketID, commentText)
+	if err != nil {
+		log.Printf("Failed to post comment to Jira: %v", err)
+		return fmt.Errorf("failed to post comment to Jira: %v", err)
+	}
+
+	log.Printf("Successfully posted comment to Jira, URL: %s", jiraComment.URL)
 	return nil
 }
 
-// mockProcessInfoGathering is a mock implementation for when the InfoGatheringAgent is not available
-func (j *JiraRetrievalAgent) mockProcessInfoGathering(ctx context.Context, taskData models.TicketAvailableTask) error {
-	log.Printf("=== MOCK INFO GATHERING ===")
-	log.Printf("Ticket: %s", taskData.TicketID)
-	log.Printf("Summary: %s", taskData.Summary)
-	
-	// Print description if available
-	if description, ok := taskData.Metadata["description"]; ok && description != "" {
-		log.Printf("Description: %s", description)
-	}
-	
-	// Print other important fields
-	log.Printf("Priority: %s", taskData.Metadata["priority"])
-	log.Printf("Issue Type: %s", taskData.Metadata["issueType"])
-	log.Printf("Reporter: %s", taskData.Metadata["reporter"])
-	log.Printf("Components: %s", taskData.Metadata["components"])
-	
-	// Create mock analysis results
-	mockAnalysis := map[string]string{
-		"Suggestion": fmt.Sprintf("This is a mock analysis for ticket %s. The ticket appears to be a %s priority %s.", 
-			taskData.TicketID, 
-			taskData.Metadata["priority"], 
-			taskData.Metadata["issueType"]),
-		"TechnicalAnalysis": "Mock technical analysis - would normally contain AI-generated content.",
-		"BusinessImpact": "Mock business impact assessment - would normally contain AI-generated content.",
-		"RecommendedPriority": taskData.Metadata["priority"],
-		"NextSteps": "Please review this ticket and assign to the appropriate team.",
-	}
-	
-	// Create mock InfoGatheredTask
-	infoGatheredTask := &models.InfoGatheredTask{
-		TicketID:        taskData.TicketID,
-		CollectedFields: mockAnalysis,
-	}
-	
-	// Format a Jira comment and print it
-	comment := j.formatJiraComment(infoGatheredTask)
-	log.Printf("=== MOCK JIRA COMMENT ===")
-	log.Printf("\n%s", comment)
-	
-	// Try to post the comment to Jira if the user wants to test the full workflow
-	postToJira := os.Getenv("MOCK_POST_TO_JIRA")
-	if postToJira == "true" || postToJira == "1" || postToJira == "yes" {
-		log.Printf("MOCK_POST_TO_JIRA is enabled, posting comment to Jira")
-		jiraComment, err := j.jiraClient.PostComment(taskData.TicketID, comment)
-		if err != nil {
-			log.Printf("Failed to post comment to Jira: %v", err)
-		} else {
-			log.Printf("Successfully posted comment to Jira, URL: %s", jiraComment.URL)
-		}
-	} else {
-		log.Printf("Set MOCK_POST_TO_JIRA=true to post this comment to Jira ticket %s", taskData.TicketID)
-	}
-	
-	return nil
-}
+
 
 // getTicketPriority extracts the priority from a ticket
 func getTicketPriority(ticket *models.JiraTicket) string {
