@@ -99,12 +99,18 @@ stop:
 	@echo "Stopping all agents..."
 	@if [ -f .infogathering.pid ]; then \
 		echo "Stopping InformationGatheringAgent..."; \
-		kill `cat .infogathering.pid` 2>/dev/null || true; \
+		PID=`cat .infogathering.pid`; \
+		kill $${PID} 2>/dev/null || true; \
+		sleep 1; \
+		kill -9 $${PID} 2>/dev/null || true; \
 		rm .infogathering.pid; \
 	fi
 	@if [ -f .jiraretrieval.pid ]; then \
 		echo "Stopping JiraRetrievalAgent..."; \
-		kill `cat .jiraretrieval.pid` 2>/dev/null || true; \
+		PID=`cat .jiraretrieval.pid`; \
+		kill $${PID} 2>/dev/null || true; \
+		sleep 1; \
+		kill -9 $${PID} 2>/dev/null || true; \
 		rm .jiraretrieval.pid; \
 	fi
 	@echo "Removing log files..."
