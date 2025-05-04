@@ -811,3 +811,120 @@ func getTicketComponents(ticket *models.JiraTicket) string {
 	}
 	return ""
 }
+
+// SetupServer creates and configures the A2A server for the JiraRetrievalAgent
+func (j *JiraRetrievalAgent) SetupServer() (*server.A2AServer, error) {
+	// Define the agent card
+	agentCard := server.AgentCard{
+		Name:        j.cfg.AgentName,
+		Description: stringPtr("Agent that retrieves information and handles webhooks"),
+		URL:         j.cfg.AgentURL,
+		Version:     j.cfg.AgentVersion,
+		Provider: &server.AgentProvider{
+			Organization: "Your Organization",
+			URL:          stringPtr("https://example.com"),
+		},
+		Capabilities: server.AgentCapabilities{
+			Streaming:              false,
+			StateTransitionHistory: true,
+		},
+		DefaultInputModes:  []string{"text"},
+		DefaultOutputModes: []string{"text"},
+		Skills: []server.AgentSkill{
+			{
+				ID:          "process-jira-webhook",
+				Name:        "Process Jira Webhook",
+				Description: stringPtr("Processes webhook events and emits 'ticket-available' tasks"),
+				Tags:        []string{"webhook", "ticket"},
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+			},
+			{
+				ID:          "process-info-gathered",
+				Name:        "Process Info Gathered",
+				Description: stringPtr("Processes information gathered and posts comments"),
+				Tags:        []string{"comment", "information"},
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+			},
+		},
+	}
+
+	// Create task manager, inject processor
+	taskManager, err := taskmanager.NewMemoryTaskManager(j)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create task manager: %w", err)
+	}
+
+	// Setup server options
+	serverOpts := []server.Option{}
+
+	// Add authentication if enabled
+	if j.cfg.AuthType != "" {
+		var authProvider auth.Provider
+		switch j.cfg.AuthType {
+		case "jwt":
+			authProvider = auth.NewJWTAuthProvider(
+				[]byte(j.cfg.JWTSecret),
+				"", // audience (empty for any)
+				"", // issuer (empty for any)
+				24*time.Hour,
+			)
+		case "apikey":
+			apiKeys := map[string]string{
+				j.cfg.APIKey: "user",
+			}
+			authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "X-API-Key")
+		default:
+			return nil, fmt.Errorf("unsupported auth type: %s", j.cfg.AuthType)
+		}
+		serverOpts = append(serverOpts, server.WithAuthProvider(authProvider))
+	}
+
+	// Create the server
+	srv, err := server.NewA2AServer(agentCard, taskManager, serverOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create server: %w", err)
+	}
+
+	// Add webhook handler
+	if err := j.RegisterWebhookHandler(srv); err != nil {
+		return nil, fmt.Errorf("failed to register webhook handler: %w", err)
+	}
+
+	return srv, nil
+}
+
+
+// StartServer starts the A2A server and handles graceful shutdown
+func (j *JiraRetrievalAgent) StartServer(ctx context.Context) error {
+	// Setup the server
+	srv, err := j.SetupServer()
+	if err != nil {
+		return fmt.Errorf("failed to setup server: %w", err)
+	}
+
+	// Start the server in a goroutine
+	addr := fmt.Sprintf("%s:%d", j.cfg.ServerHost, j.cfg.ServerPort)
+	go func() {
+		log.Printf("Starting A2A server on %s", addr)
+		if err := srv.Start(addr); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	<-ctx.Done()
+
+	// Create a context with a timeout for graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Shutdown the server
+	log.Println("Shutting down server...")
+	if err := srv.Stop(shutdownCtx); err != nil {
+		return fmt.Errorf("failed to shutdown server: %w", err)
+	}
+
+	return nil
+}
