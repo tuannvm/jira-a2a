@@ -50,10 +50,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Start the server and handle shutdown
-	if err := agent.StartServer(ctx); err != nil {
-		log.Fatalf("Server error: %v", err)
+	// Setup server
+	if err := agent.SetupAgentServer(); err != nil {
+		log.Fatalf("Failed to setup agent server: %v", err)
 	}
 
-	log.Println("Server shutdown complete")
+	// Start server
+	log.Printf("Starting InformationGatheringAgent server...")
+	if err := agent.StartAgentServer(ctx); err != nil {
+		log.Fatalf("Failed to start agent server: %v", err)
+	}
+
+	log.Printf("InformationGatheringAgent server stopped gracefully")
 }
