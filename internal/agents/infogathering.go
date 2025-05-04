@@ -88,13 +88,31 @@ func (a *InformationGatheringAgent) SetupServer() (*server.A2AServer, error) {
 	// Add authentication if configured
 	if a.config.AuthType != "" {
 		var authProvider auth.Provider
-		if a.config.AuthType == "jwt" {
-			authProvider = auth.NewJWTAuthProvider([]byte(a.config.JWTSecret), "HS256", "", 24*time.Hour)
-		} else if a.config.AuthType == "apikey" {
-			apiKeys := map[string]string{"X-API-Key": a.config.APIKey}
-			authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "")
+		switch a.config.AuthType {
+		case "jwt":
+			log.Printf("Configuring JWT authentication for InformationGatheringAgent")
+			authProvider = auth.NewJWTAuthProvider(
+				[]byte(a.config.JWTSecret),
+				"", // audience (empty for any)
+				"", // issuer (empty for any)
+				24*time.Hour,
+			)
+		case "apikey":
+			log.Printf("Configuring API key authentication for InformationGatheringAgent (API key length: %d)", len(a.config.APIKey))
+			// The key is the expected API key value, and the value is the user identifier (not used in this case)
+			// The header name must match what the client is using (X-API-Key)
+			apiKeys := map[string]string{
+				a.config.APIKey: "user",
+			}
+			log.Printf("API key authentication configured with header: X-API-Key")
+			authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "X-API-Key")
+		default:
+			log.Printf("Warning: Unsupported authentication type '%s'", a.config.AuthType)
+			return nil, fmt.Errorf("unsupported auth type: %s", a.config.AuthType)
 		}
 		serverOpts = append(serverOpts, server.WithAuthProvider(authProvider))
+	} else {
+		log.Printf("Warning: No authentication configured for InformationGatheringAgent")
 	}
 
 	// Create the server

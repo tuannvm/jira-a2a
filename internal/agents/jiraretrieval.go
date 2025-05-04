@@ -36,7 +36,7 @@ func NewJiraRetrievalAgent(cfg *config.Config) *JiraRetrievalAgent {
 
 	// Create client to communicate with InfoGatheringAgent
 	infoAgentURL := cfg.AgentURL
-	
+
 	// If we're running the JiraRetrievalAgent, we need to connect to the InfoGatheringAgent
 	if cfg.AgentName == config.JiraRetrievalAgentName {
 		// Construct the URL for the InfoGatheringAgent using the default port from config
@@ -45,11 +45,21 @@ func NewJiraRetrievalAgent(cfg *config.Config) *JiraRetrievalAgent {
 
 	var infoAgentClient *client.A2AClient
 	var err error
-	
+
+	// Create client with appropriate authentication
 	if cfg.AuthType == "jwt" {
+		// JWT authentication
 		infoAgentClient, err = client.NewA2AClient(infoAgentURL)
-	} else {
+	} else if cfg.AuthType == "apikey" {
+		// API key authentication - ensure header name matches what's expected by the server
+		log.Printf("Using API key authentication with InfoGatheringAgent (API key length: %d)", len(cfg.APIKey))
+		// Note: The header name must be 'X-API-Key' and the value must be the API key
+		// This must match how the server is configured in InformationGatheringAgent
 		infoAgentClient, err = client.NewA2AClient(infoAgentURL, client.WithAPIKeyAuth(cfg.APIKey, "X-API-Key"))
+	} else {
+		// Default to no authentication
+		log.Printf("Warning: No authentication configured for InfoGatheringAgent client")
+		infoAgentClient, err = client.NewA2AClient(infoAgentURL)
 	}
 
 	if err != nil {
@@ -157,7 +167,8 @@ func (j *JiraRetrievalAgent) ProcessInfoGatheredTask(ctx context.Context, taskID
 		// Continue processing even if comment posting fails
 	} else {
 		log.Printf("Successfully posted comment to Jira, URL: %s", jiraComment.URL)
-		task.CommentURL = jiraComment.URL
+		// Note: CommentURL field has been removed from InfoGatheredTask model
+		// as the InformationGatheringAgent no longer interacts with Jira API
 	}
 
 	// Record the comment as an artifact
@@ -233,7 +244,7 @@ func (j *JiraRetrievalAgent) updateTicketFields(ticketID string, fieldUpdates ma
 
 	// In a real implementation, we would call the Jira API to update the fields
 	// For example: return j.jiraClient.UpdateTicket(ticketID, fieldUpdates)
-	
+
 	// Return nil for now since this is a placeholder
 	return nil
 }
@@ -282,7 +293,7 @@ func (j *JiraRetrievalAgent) formatJiraComment(task *models.InfoGatheredTask) st
 
 	// Add header with emoji
 	sb.WriteString(":mag: *Information Gathering Results* :mag:\n\n")
-	
+
 	// Add a summary of the analysis with distinctive formatting
 	if suggestion, ok := task.CollectedFields["Suggestion"]; ok && suggestion != "" {
 		sb.WriteString(":bulb: *Recommendation:* \n")
@@ -291,20 +302,20 @@ func (j *JiraRetrievalAgent) formatJiraComment(task *models.InfoGatheredTask) st
 
 	// Group the collected fields by category if possible
 	categories := map[string][]string{
-		"Technical Analysis": {"TechnicalAnalysis", "CodeReview", "ArchitectureImpact"},
-		"Business Impact": {"BusinessImpact", "UserImpact", "CustomerImpact"},
-		"Recommendations": {"RecommendedPriority", "RecommendedComponents", "RecommendedLabels", "NextSteps"},
+		"Technical Analysis":     {"TechnicalAnalysis", "CodeReview", "ArchitectureImpact"},
+		"Business Impact":        {"BusinessImpact", "UserImpact", "CustomerImpact"},
+		"Recommendations":        {"RecommendedPriority", "RecommendedComponents", "RecommendedLabels", "NextSteps"},
 		"Additional Information": {"References", "RelatedTickets", "Context"},
 	}
-	
+
 	// Track which fields we've already processed
 	processedFields := map[string]bool{"Suggestion": true}
-	
+
 	// Add fields by category
 	for category, fieldNames := range categories {
 		hasFields := false
 		categoryContent := fmt.Sprintf("*%s:*\n", category)
-		
+
 		for _, fieldName := range fieldNames {
 			if value, ok := task.CollectedFields[fieldName]; ok && value != "" {
 				processedFields[fieldName] = true
@@ -312,12 +323,12 @@ func (j *JiraRetrievalAgent) formatJiraComment(task *models.InfoGatheredTask) st
 				hasFields = true
 			}
 		}
-		
+
 		if hasFields {
 			sb.WriteString(categoryContent + "\n")
 		}
 	}
-	
+
 	// Add any remaining fields that weren't categorized
 	hasUncategorized := false
 	uncategorizedContent := "*Other Analysis Details:*\n"
@@ -327,7 +338,7 @@ func (j *JiraRetrievalAgent) formatJiraComment(task *models.InfoGatheredTask) st
 			hasUncategorized = true
 		}
 	}
-	
+
 	if hasUncategorized {
 		sb.WriteString(uncategorizedContent + "\n")
 	}
@@ -344,13 +355,13 @@ func (j *JiraRetrievalAgent) formatJiraComment(task *models.InfoGatheredTask) st
 // WebhookRequest represents the structure of incoming webhook requests
 type WebhookRequest struct {
 	TicketID     string            `json:"ticketId"`
-	Event        string            `json:"event"`      // "created", "updated", "commented", etc.
-	UserName     string            `json:"userName"`   // The user who triggered the event
-	UserEmail    string            `json:"userEmail"`  // The email of the user who triggered the event
-	ProjectKey   string            `json:"projectKey"` // The key of the project containing the issue
-	Changes      map[string]string `json:"changes"`    // Map of fields that were changed and their new values
-	WebhookName  string            `json:"webhookName"` // Name of the webhook that was triggered
-	Timestamp    string            `json:"timestamp"`   // When the webhook was triggered
+	Event        string            `json:"event"`                  // "created", "updated", "commented", etc.
+	UserName     string            `json:"userName"`               // The user who triggered the event
+	UserEmail    string            `json:"userEmail"`              // The email of the user who triggered the event
+	ProjectKey   string            `json:"projectKey"`             // The key of the project containing the issue
+	Changes      map[string]string `json:"changes"`                // Map of fields that were changed and their new values
+	WebhookName  string            `json:"webhookName"`            // Name of the webhook that was triggered
+	Timestamp    string            `json:"timestamp"`              // When the webhook was triggered
 	CustomFields map[string]string `json:"customFields,omitempty"` // Any custom fields from Jira
 }
 
@@ -361,8 +372,8 @@ func (j *JiraRetrievalAgent) RegisterWebhookHandler(srv *server.A2AServer) error
 	if j.cfg.AuthType == "jwt" {
 		authProvider = auth.NewJWTAuthProvider(
 			[]byte(j.cfg.JWTSecret),
-			"", // audience
-			"", // issuer
+			"",           // audience
+			"",           // issuer
 			24*time.Hour, // expiration
 		)
 		log.Printf("Created JWT auth provider for webhook handler")
@@ -375,13 +386,13 @@ func (j *JiraRetrievalAgent) RegisterWebhookHandler(srv *server.A2AServer) error
 	} else {
 		log.Printf("No authentication configured for webhook handler")
 	}
-	
+
 	// Register the webhook handler with a separate HTTP server
 	err := j.registerFallbackWebhookHandler(authProvider)
 	if err != nil {
 		return fmt.Errorf("failed to register fallback webhook handler: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -390,16 +401,16 @@ func logWebhookRegistrationSuccess(cfg *config.Config) {
 	// Log webhook endpoint information
 	log.Printf("Webhook endpoint registered at: http://%s:%d/webhook", cfg.ServerHost, cfg.ServerPort)
 	log.Printf("Security note: Webhook is using the server's built-in authentication")
-	
+
 	// Print test information with authentication header
 	if cfg.AuthType == "apikey" {
-		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"X-API-Key: %s\" http://%s:%d/webhook", 
+		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"X-API-Key: %s\" http://%s:%d/webhook",
 			cfg.APIKey, cfg.ServerHost, cfg.ServerPort)
 	} else if cfg.AuthType == "jwt" {
-		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"Authorization: Bearer YOUR_JWT_TOKEN\" http://%s:%d/webhook", 
+		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"Authorization: Bearer YOUR_JWT_TOKEN\" http://%s:%d/webhook",
 			cfg.ServerHost, cfg.ServerPort)
 	} else {
-		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' http://%s:%d/webhook", 
+		log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' http://%s:%d/webhook",
 			cfg.ServerHost, cfg.ServerPort)
 	}
 }
@@ -408,25 +419,25 @@ func logWebhookRegistrationSuccess(cfg *config.Config) {
 // This is used as a fallback when we can't register with the server's HTTP handler
 func (j *JiraRetrievalAgent) registerFallbackWebhookHandler(authProvider auth.Provider) error {
 	log.Printf("Creating a separate HTTP server for webhooks")
-	
+
 	// Create an authenticated handler using the provided auth provider
 	var handler http.Handler
-	
+
 	if authProvider != nil {
 		log.Printf("Using authentication for webhook endpoint")
-		
+
 		// Create a middleware that authenticates requests before passing them to the webhook handler
 		handler = AuthMiddleware(authProvider, http.HandlerFunc(j.HandleWebhook))
 	} else {
 		log.Printf("WARNING: No authentication provider available, webhook endpoint will be unsecured")
 		handler = http.HandlerFunc(j.HandleWebhook)
 	}
-	
+
 	// Create a simple HTTP server to handle webhook requests
 	go func() {
 		router := http.NewServeMux()
 		router.Handle("/webhook", handler)
-		
+
 		// This function is now deprecated as we're using the integrated webhook handler
 		// But we'll keep it for backward compatibility
 		// Use a different port for the webhook server to avoid conflict with the A2A server
@@ -435,28 +446,28 @@ func (j *JiraRetrievalAgent) registerFallbackWebhookHandler(authProvider auth.Pr
 			Addr:    fmt.Sprintf(":%d", webhookPort),
 			Handler: router,
 		}
-		
+
 		// Log webhook endpoint information
 		log.Printf("Webhook endpoint available at: http://%s:%d/webhook", j.cfg.ServerHost, webhookPort)
-		
+
 		// Print test information with authentication header
 		if j.cfg.AuthType == "apikey" {
-			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"X-API-Key: %s\" http://%s:%d/webhook", 
+			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"X-API-Key: %s\" http://%s:%d/webhook",
 				j.cfg.APIKey, j.cfg.ServerHost, webhookPort)
 		} else if j.cfg.AuthType == "jwt" {
-			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"Authorization: Bearer YOUR_JWT_TOKEN\" http://%s:%d/webhook", 
+			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' -H \"Authorization: Bearer YOUR_JWT_TOKEN\" http://%s:%d/webhook",
 				j.cfg.ServerHost, webhookPort)
 		} else {
-			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' http://%s:%d/webhook", 
+			log.Printf("You can test it with: curl -X POST -H \"Content-Type: application/json\" -d '{\"ticketId\":\"PROJ-123\",\"event\":\"created\"}' http://%s:%d/webhook",
 				j.cfg.ServerHost, webhookPort)
 		}
-		
+
 		log.Printf("Starting webhook server on port %d", webhookPort)
 		if err := webhookServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Webhook server error: %v", err)
 		}
 	}()
-	
+
 	return nil
 }
 
@@ -485,7 +496,7 @@ func AuthMiddleware(provider auth.Provider, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Authenticate the request
 		username, err := provider.Authenticate(r)
 		if err != nil {
@@ -494,11 +505,11 @@ func AuthMiddleware(provider auth.Provider, next http.Handler) http.Handler {
 			returnJSONError(w, http.StatusUnauthorized, fmt.Sprintf("Unauthorized: %v", err))
 			return
 		}
-		
+
 		// Authentication succeeded
 		// Create a new context with the authenticated user
 		authCtx := context.WithValue(r.Context(), AuthUserContextKey{}, username)
-		
+
 		// Call the next handler with the authenticated context
 		next.ServeHTTP(w, r.WithContext(authCtx))
 	})
@@ -589,9 +600,9 @@ func (j *JiraRetrievalAgent) HandleWebhook(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	responseBody := map[string]string{
-		"status":   "success",
-		"ticketId": webhookReq.TicketID,
-		"message":  fmt.Sprintf("Successfully processed webhook for ticket %s", webhookReq.TicketID),
+		"status":    "success",
+		"ticketId":  webhookReq.TicketID,
+		"message":   fmt.Sprintf("Successfully processed webhook for ticket %s", webhookReq.TicketID),
 		"requestId": requestID,
 	}
 	responseJSON, _ := json.Marshal(responseBody)
@@ -629,19 +640,19 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 			"priority":       priority,
 			"issueType":      issueType,
 			"reporter":       reporter,
-			"hasAttachments":  fmt.Sprintf("%v", hasAttachments),
+			"hasAttachments": fmt.Sprintf("%v", hasAttachments),
 			"components":     components,
 			"description":    ticket.Description,
 		},
 	}
-	
+
 	// Add any changes that were reported in the webhook
 	if len(webhookReq.Changes) > 0 {
 		for field, value := range webhookReq.Changes {
 			taskData.Metadata["change_"+field] = value
 		}
 	}
-	
+
 	// Add any custom fields
 	if len(webhookReq.CustomFields) > 0 {
 		for field, value := range webhookReq.CustomFields {
@@ -674,7 +685,7 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 	// Generate a unique task ID based on the ticket ID and timestamp
 	taskID := fmt.Sprintf("task-%s-%d", webhookReq.TicketID, time.Now().UnixNano())
 	log.Printf("Generated task ID: %s", taskID)
-	
+
 	// Send the task to InfoGatheringAgent
 	log.Printf("Sending 'ticket-available' task to InfoGatheringAgent with %d metadata fields", len(taskData.Metadata))
 	taskParams := protocol.SendTaskParams{
@@ -700,22 +711,22 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 	}
 
 	log.Printf("Successfully sent task. Task ID: %s", resp.ID)
-	
+
 	// Extract the InfoGatheredTask from the response
 	var infoTask models.InfoGatheredTask
-	
+
 	// Only proceed if the task is completed synchronously
 	if resp.Status.State != "completed" || resp.Status.Message == nil {
 		return fmt.Errorf("task is not completed yet or no message in response")
 	}
-	
+
 	log.Printf("Task was completed synchronously, extracting result from response")
-	
+
 	// Ensure we have message parts to process
 	if len(resp.Status.Message.Parts) == 0 {
 		return fmt.Errorf("task completed but no message parts found")
 	}
-	
+
 	// Try to extract the task data from the message parts
 	for _, part := range resp.Status.Message.Parts {
 		// Try to extract from TextPart (which is what InfoGatheringAgent uses)
@@ -723,10 +734,10 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 		if !ok || textPart == nil || textPart.Text == "" {
 			continue
 		}
-		
+
 		// Log the raw text for debugging
 		log.Printf("Found TextPart in response: %s", textPart.Text)
-		
+
 		// Try direct unmarshal first
 		if err := json.Unmarshal([]byte(textPart.Text), &infoTask); err == nil {
 			if infoTask.TicketID != "" {
@@ -734,7 +745,7 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 				goto ProcessResult
 			}
 		}
-		
+
 		// Try parsing as a JSON string that contains the actual JSON
 		var jsonStr string
 		if err := json.Unmarshal([]byte(textPart.Text), &jsonStr); err == nil {
@@ -747,7 +758,7 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 			}
 		}
 	}
-	
+
 	// If we reach here, we couldn't extract the InfoGatheredTask
 	return fmt.Errorf("failed to extract InfoGatheredTask from response")
 
@@ -770,8 +781,6 @@ ProcessResult:
 	log.Printf("Successfully posted comment to Jira, URL: %s", jiraComment.URL)
 	return nil
 }
-
-
 
 // getTicketPriority extracts the priority from a ticket
 func getTicketPriority(ticket *models.JiraTicket) string {
@@ -894,7 +903,6 @@ func (j *JiraRetrievalAgent) SetupServer() (*server.A2AServer, error) {
 
 	return srv, nil
 }
-
 
 // StartServer starts the A2A server and handles graceful shutdown
 func (j *JiraRetrievalAgent) StartServer(ctx context.Context) error {
