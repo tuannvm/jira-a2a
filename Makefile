@@ -107,6 +107,8 @@ stop:
 		kill `cat .jiraretrieval.pid` 2>/dev/null || true; \
 		rm .jiraretrieval.pid; \
 	fi
+	@echo "Removing log files..."
+	@rm -f logs/infogathering.log logs/jiraretrieval.log
 	@echo "All agents stopped!"
 
 # Run client target removed

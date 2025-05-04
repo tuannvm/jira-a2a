@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/tuannvm/jira-a2a/internal/jira"
 	"github.com/tuannvm/jira-a2a/internal/models"
 	a2aclient "trpc.group/trpc-go/trpc-a2a-go/client"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
@@ -86,7 +86,7 @@ func (j *JiraRetrievalAgent) SetupHTTPServer() {
 // StartHTTPServer starts an HTTP server for Jira webhook events.
 func (j *JiraRetrievalAgent) StartHTTPServer() error {
 	addr := fmt.Sprintf("%s:%d", j.cfg.ServerHost, j.cfg.WebhookPort)
-	log.Printf("Starting webhook server on %s", addr)
+	log.Infof("Starting webhook server on %s", addr)
 	return http.ListenAndServe(addr, j.httpMux)
 }
 
@@ -117,10 +117,10 @@ func (j *JiraRetrievalAgent) handleWebhook(w http.ResponseWriter, r *http.Reques
 
 // ProcessWebhook fetches ticket data and forwards it to InformationGatheringAgent.
 func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.WebhookRequest) error {
-	log.Printf("Processing webhook for ticket %s, event %s", webReq.TicketID, webReq.Event)
+	log.Infof("Processing Jira webhook for ticket %s, event %s", webReq.TicketID, webReq.Event)
 	ticket, err := j.jiraClient.GetTicket(webReq.TicketID)
 	if err != nil {
-		log.Printf("Jira API fetch failed: %v", err)
+		log.Errorf("Jira API fetch failed for ticket %s: %v", webReq.TicketID, err)
 		// Use client ticket type for fallback
 		ticket = &jira.ClientJiraTicket{Key: webReq.TicketID, Summary: webReq.TicketID}
 	}
@@ -142,24 +142,37 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 	}
 	// Use DataPart literal
 	msg := protocol.Message{Parts: []protocol.Part{&protocol.DataPart{Data: taskData}}}
+	log.Infof("Sending TicketAvailableTask for ticket %s to InformationGatheringAgent", ticket.Key)
 	resp, err := j.infoAgentClient.SendTasks(ctx, protocol.SendTaskParams{Message: msg})
 	if err != nil {
+		log.Errorf("Failed to send TicketAvailableTask for ticket %s: %v", ticket.Key, err)
 		return fmt.Errorf("failed to send task: %w", err)
 	}
-	log.Printf("Sent task to InformationGatheringAgent: %s", resp.ID)
+	log.Infof("Successfully sent TicketAvailableTask to InformationGatheringAgent (Task ID: %s)", resp.ID)
 	return nil
 }
 
 // Process handles responses (InfoGatheredTask) from InformationGatheringAgent.
 func (j *JiraRetrievalAgent) Process(ctx context.Context, taskID string, msg protocol.Message, handle taskmanager.TaskHandle) error {
 	var infoTask models.InfoGatheredTask
+	log.Infof("JiraRetrievalAgent received InfoGatheredTask (Task ID: %s)", taskID)
+
 	if err := common.ExtractInfoGatheredTask(&msg, &infoTask); err != nil {
+		log.Errorf("Failed to extract InfoGatheredTask for Task ID %s: %v", taskID, err)
 		return fmt.Errorf("invalid InfoGatheredTask: %w", err)
 	}
-	comment := j.formatJiraComment(&infoTask)
-	if _, err := j.jiraClient.PostComment(infoTask.TicketID, comment); err != nil {
-		log.Printf("Comment post failed: %v", err)
+	log.Infof("Processing InfoGatheredTask for ticket %s", infoTask.TicketID)
+
+	// Format and post comment to Jira
+	commentText := j.formatJiraComment(&infoTask)
+	log.Infof("Posting comment to Jira API for ticket %s", infoTask.TicketID)
+	cmt, err := j.jiraClient.PostComment(infoTask.TicketID, commentText)
+	if err != nil {
+		log.Errorf("Failed to post comment for ticket %s: %v", infoTask.TicketID, err)
+	} else {
+		log.Infof("Successfully posted comment to Jira API for ticket %s (URL: %s)", infoTask.TicketID, cmt.URL)
 	}
+
 	response := protocol.NewTextPart(fmt.Sprintf("Comment posted for ticket %s", infoTask.TicketID))
 	if err := handle.UpdateStatus(protocol.TaskState("completed"), &protocol.Message{Parts: []protocol.Part{response}}); err != nil {
 		return err
