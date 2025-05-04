@@ -320,14 +320,6 @@ type WebhookRequest struct {
 
 // RegisterWebhookHandler registers the webhook handler with the server
 func (j *JiraRetrievalAgent) RegisterWebhookHandler(srv *server.A2AServer) error {
-	// Get the A2A server's http.Handler
-	baseHandler := srv.Handler()
-	if baseHandler == nil {
-		return fmt.Errorf("A2A server returned nil handler")
-	}
-	
-	log.Printf("Integrating webhook handler with A2A server")
-	
 	// Create an auth provider based on the configuration
 	var authProvider auth.Provider
 	if j.cfg.AuthType == "jwt" {
@@ -348,33 +340,11 @@ func (j *JiraRetrievalAgent) RegisterWebhookHandler(srv *server.A2AServer) error
 		log.Printf("No authentication configured for webhook handler")
 	}
 	
-	// Create a new ServeMux to handle both the A2A server and our webhook handler
-	mux := http.NewServeMux()
-	
-	// Add the webhook handler with authentication if configured
-	var webhookHandler http.Handler = http.HandlerFunc(j.HandleWebhook)
-	if authProvider != nil {
-		log.Printf("Using authentication for webhook endpoint")
-		webhookHandler = AuthMiddleware(authProvider, webhookHandler)
+	// Register the webhook handler with a separate HTTP server
+	err := j.registerFallbackWebhookHandler(authProvider)
+	if err != nil {
+		return fmt.Errorf("failed to register fallback webhook handler: %w", err)
 	}
-	
-	// Register the webhook handler at /webhook path
-	mux.Handle("/webhook", webhookHandler)
-	
-	// Register the A2A server handler for all other paths
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only handle requests that aren't for /webhook
-		if r.URL.Path != "/webhook" {
-			baseHandler.ServeHTTP(w, r)
-		}
-	}))
-	
-	// Store the combined handler in the JiraRetrievalAgent
-	j.httpServer = mux
-	
-	// Log success
-	log.Printf("Successfully integrated webhook handler with A2A server")
-	logWebhookRegistrationSuccess(j.cfg)
 	
 	return nil
 }
@@ -657,16 +627,18 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 		}
 	}
 
-	// Convert task to JSON
-	taskJSON, err := json.Marshal(taskData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal task: %v", err)
+	// Create a message with the task data using DataPart for proper JSON handling
+	// This avoids double-encoding the JSON and follows best practices for content types
+	dataPart := protocol.DataPart{
+		Type: "data",
+		Data: taskData,
+		Metadata: map[string]interface{}{
+			"content-type": "application/json",
+		},
 	}
 
-	// Create a message with the task data
-	textPart := protocol.NewTextPart(string(taskJSON))
 	message := protocol.Message{
-		Parts: []protocol.Part{textPart},
+		Parts: []protocol.Part{&dataPart},
 	}
 
 	// Send the task to InfoGatheringAgent

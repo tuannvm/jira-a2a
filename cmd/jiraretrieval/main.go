@@ -133,7 +133,7 @@ func main() {
 	// Print usage information
 	fmt.Println("Starting JiraRetrievalAgent server...")
 	fmt.Printf("Server will listen on %s:%d\n", cfg.ServerHost, cfg.ServerPort)
-	fmt.Printf("Webhook endpoint: http://%s:%d/webhook\n", cfg.ServerHost, cfg.ServerPort)
+	fmt.Printf("Webhook endpoint: http://%s:%d/webhook\n", cfg.ServerHost, cfg.ServerPort + 3)
 	fmt.Println("To run the client example, use: make test-client")
 
 	// Create a context that will be canceled on SIGINT or SIGTERM
