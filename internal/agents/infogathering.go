@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -94,8 +95,8 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	// Use the specific function for extracting TicketAvailableTask
 	if err := common.ExtractTicketData(message, &ticketTask); err != nil {
 		errMsg := fmt.Sprintf("failed to extract TicketAvailableTask data for task %s: %v", taskID, err)
-		log.Errorf(errMsg)
-		return fmt.Errorf(errMsg)
+		log.Error(errMsg)
+		return errors.New(errMsg)
 	}
 
 	log.Infof("Processing TicketAvailableTask for ticket %s (Task ID: %s)", ticketTask.TicketID, taskID)
@@ -104,8 +105,8 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 	analysisResult, err := a.analyzeTicketInfo(&ticketTask)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to analyze ticket info for task %s: %v", taskID, err)
-		log.Errorf(errMsg)
-		return fmt.Errorf(errMsg)
+		log.Error(errMsg)
+		return errors.New(errMsg)
 	}
 
 	// 3. Generate a summary (using LLM if available)
@@ -131,7 +132,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 		Summary:        summary,
 	}
 
-	// 5. Create the result message
+	// 5. Create the result message with InfoGatheredTask payload
 	resultMessage := protocol.Message{
 		Role: protocol.MessageRoleAgent,
 		Parts: []protocol.Part{
@@ -141,12 +142,9 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 			},
 		},
 	}
-	// Debug: log created task and message payloads
-	log.Infof("InfoGatheredTask struct: %+v", infoGatheredTask)
-	log.Infof("ResultMessage struct: %+v", resultMessage)
 
-	// 6. Send the InfoGatheredTask artifact as a final chunk
-	log.Infof("Adding final artifact for task %s", taskID)
+	// 6. Send InfoGatheredTask as an artifact
+	log.Infof("Adding artifact for task %s", taskID)
 	last := true
 	artifact := protocol.Artifact{
 		Parts:     resultMessage.Parts,
@@ -156,12 +154,7 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 		log.Errorf("AddArtifact failed for task %s: %v", taskID, err)
 		return fmt.Errorf("failed to add artifact for task %s: %w", taskID, err)
 	}
-	// 7. Mark task as completed without payload
-	log.Infof("Marking task %s as completed", taskID)
-	if err := handle.UpdateStatus(protocol.TaskStateCompleted, nil); err != nil {
-		log.Errorf("UpdateStatus failed for task %s: %v", taskID, err)
-		return fmt.Errorf("failed to update status for task %s: %w", taskID, err)
-	}
+
 	return nil
 }
 
@@ -241,7 +234,7 @@ func (a *InformationGatheringAgent) parseLLMResponse(response string) (map[strin
 	jsonStr, err := common.ExtractJSON(response) // Use common utility
 	if err != nil {
 		log.Warnf("Failed to extract JSON from LLM response. Response was: %s", response)
-		return nil, fmt.Errorf("failed to extract JSON from LLM response: %w. Raw response logged.", err)
+		return nil, fmt.Errorf("failed to extract JSON from LLM response: %w", err)
 	}
 
 	var resultMap map[string]interface{}

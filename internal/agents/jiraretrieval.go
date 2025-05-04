@@ -143,7 +143,7 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 	}
 	// Send task data as DataPart with explicit type and metadata (role must be set)
 	msg := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{&protocol.DataPart{
-		Type:     "data",
+		Type:     protocol.PartTypeData,
 		Data:     taskData,
 		Metadata: map[string]interface{}{"content-type": "application/json"},
 	}})
@@ -163,10 +163,15 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 	log.Infof("StreamTask returned event channel for ticket %s", ticket.Key)
 	// Handle events asynchronously: look for InfoGatheredTask artifact and post back to Jira
 	go func(key string, evCh <-chan protocol.TaskEvent) {
-		// Ensure context is canceled when goroutine exits
 		defer cancel()
 		log.Infof("Awaiting A2A events for ticket %s", key)
 		for ev := range evCh {
+			// Ultra-verbose logging: log the raw event
+			log.Infof("[DEBUG] RAW SSE EVENT for ticket %s: %#v", key, ev)
+			if ev == nil {
+				log.Warnf("[DEBUG] Received nil event for ticket %s", key)
+				continue
+			}
 			log.Infof("Received SSE event: %T %+v", ev, ev)
 			switch e := ev.(type) {
 			case protocol.TaskArtifactUpdateEvent:
@@ -188,30 +193,11 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 					log.Infof("Final artifact for ticket %s, ending SSE subscription", key)
 					return
 				}
-			case protocol.TaskStatusUpdateEvent:
-				// Handle final status update carrying payload
-				if e.IsFinal() && e.Status.Message != nil {
-					log.Infof("Final status update with payload for ticket %s", key)
-					msg := *e.Status.Message
-					var infoTask models.InfoGatheredTask
-					if err := common.ExtractInfoGatheredTask(&msg, &infoTask); err != nil {
-						log.Errorf("Failed to extract InfoGatheredTask for task %s: %v", key, err)
-						continue
-					}
-					commentText := j.formatJiraComment(&infoTask)
-					log.Infof("Posting comment to Jira API for ticket %s", infoTask.TicketID)
-					if cmt, err := j.jiraClient.PostComment(infoTask.TicketID, commentText); err != nil {
-						log.Errorf("Failed to post comment for ticket %s: %v", infoTask.TicketID, err)
-					} else {
-						log.Infof("Successfully posted comment for ticket %s (URL: %s)", infoTask.TicketID, cmt.URL)
-					}
-					log.Infof("Final status update for ticket %s, ending SSE subscription", key)
-					return
-				}
 			default:
 				log.Debugf("Ignoring event %T for ticket %s", ev, key)
 			}
 		}
+		log.Infof("SSE event channel closed for ticket %s (no more events)", key)
 	}(ticket.Key, events)
 	log.Infof("Subscribed to TicketAvailableTask for ticket %s (Task ID: %s)", ticket.Key, taskID)
 	return nil
