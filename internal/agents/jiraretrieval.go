@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -702,105 +701,58 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webhookReq *Web
 
 	log.Printf("Successfully sent task. Task ID: %s", resp.ID)
 	
-	// Check if the task is already completed
+	// Extract the InfoGatheredTask from the response
 	var infoTask models.InfoGatheredTask
-	var extracted bool
 	
-	// If the task is already completed in the response, extract the result directly
-	if resp.Status.State == "completed" && resp.Status.Message != nil {
-		log.Printf("Task was completed synchronously, extracting result from response")
+	// Only proceed if the task is completed synchronously
+	if resp.Status.State != "completed" || resp.Status.Message == nil {
+		return fmt.Errorf("task is not completed yet or no message in response")
+	}
+	
+	log.Printf("Task was completed synchronously, extracting result from response")
+	
+	// Ensure we have message parts to process
+	if len(resp.Status.Message.Parts) == 0 {
+		return fmt.Errorf("task completed but no message parts found")
+	}
+	
+	// Try to extract the task data from the message parts
+	for _, part := range resp.Status.Message.Parts {
+		// Try to extract from TextPart (which is what InfoGatheringAgent uses)
+		textPart, ok := part.(*protocol.TextPart)
+		if !ok || textPart == nil || textPart.Text == "" {
+			continue
+		}
 		
-		// Extract the InfoGatheredTask from the response message
-		if len(resp.Status.Message.Parts) > 0 {
-			// Try to extract the task data from the message parts
-			for _, part := range resp.Status.Message.Parts {
-				// Try to extract from TextPart (which is what InfoGatheringAgent uses)
-				textPart, ok := part.(*protocol.TextPart)
-				if ok && textPart != nil && textPart.Text != "" {
-					// Log the raw text for debugging
-					log.Printf("Found TextPart in response: %s", textPart.Text)
-					
-					// Try direct unmarshal first
-					if err := json.Unmarshal([]byte(textPart.Text), &infoTask); err == nil {
-						if infoTask.TicketID != "" {
-							extracted = true
-							log.Printf("Successfully extracted InfoGatheredTask directly")
-							break
-						}
-					} else {
-						log.Printf("Direct unmarshal failed: %v", err)
-						
-						// Try parsing as a JSON string that contains the actual JSON
-						var jsonStr string
-						if err := json.Unmarshal([]byte(textPart.Text), &jsonStr); err == nil {
-							log.Printf("Successfully parsed as JSON string: %s", jsonStr)
-							
-							// Now try to parse the string as an InfoGatheredTask
-							if err := json.Unmarshal([]byte(jsonStr), &infoTask); err == nil {
-								if infoTask.TicketID != "" {
-									extracted = true
-									log.Printf("Successfully extracted InfoGatheredTask from JSON string")
-									break
-								}
-							} else {
-								log.Printf("Failed to parse JSON string as InfoGatheredTask: %v", err)
-							}
-						} else {
-							log.Printf("Failed to parse as JSON string: %v", err)
-							
-							// Try one more approach - sometimes the JSON might be malformed
-							// Let's try to extract the fields manually
-							log.Printf("Attempting manual extraction from text: %s", textPart.Text)
-							
-							// Create a simple regex to extract the ticketId
-							ticketIDRegex := regexp.MustCompile(`"ticketId":"([^"]+)"`)
-							matches := ticketIDRegex.FindStringSubmatch(textPart.Text)
-							if len(matches) > 1 {
-								ticketID := matches[1]
-								log.Printf("Extracted ticketId: %s", ticketID)
-								
-								// Create a basic InfoGatheredTask with the extracted ticketId
-								infoTask = models.InfoGatheredTask{
-									TicketID: ticketID,
-									CollectedFields: map[string]string{
-										"Summary":      taskData.Summary,
-										"Analysis":     "Analysis completed",
-										"Suggestion":   "Please review this ticket",
-									},
-								}
-								extracted = true
-								log.Printf("Created InfoGatheredTask from regex extraction")
-								break
-							}
-						}
-					}
+		// Log the raw text for debugging
+		log.Printf("Found TextPart in response: %s", textPart.Text)
+		
+		// Try direct unmarshal first
+		if err := json.Unmarshal([]byte(textPart.Text), &infoTask); err == nil {
+			if infoTask.TicketID != "" {
+				log.Printf("Successfully extracted InfoGatheredTask directly")
+				goto ProcessResult
+			}
+		}
+		
+		// Try parsing as a JSON string that contains the actual JSON
+		var jsonStr string
+		if err := json.Unmarshal([]byte(textPart.Text), &jsonStr); err == nil {
+			// Now try to parse the string as an InfoGatheredTask
+			if err := json.Unmarshal([]byte(jsonStr), &infoTask); err == nil {
+				if infoTask.TicketID != "" {
+					log.Printf("Successfully extracted InfoGatheredTask from JSON string")
+					goto ProcessResult
 				}
 			}
-		} else {
-			log.Printf("Task completed but no message parts found")
 		}
-	} else {
-		log.Printf("Task is not completed yet or no status in response, would need to stream events (not implemented)")
-		// In a real implementation, we would use StreamTask here to wait for completion
-		// But since we're having issues with StreamTask, we'll use a fallback approach
 	}
+	
+	// If we reach here, we couldn't extract the InfoGatheredTask
+	return fmt.Errorf("failed to extract InfoGatheredTask from response")
 
-	// If we couldn't extract the InfoGatheredTask, create a fallback implementation
-	if !extracted {
-		log.Printf("Failed to extract InfoGatheredTask from response, creating fallback implementation")
-		// Create a basic InfoGatheredTask with the ticket data
-		infoTask = models.InfoGatheredTask{
-			TicketID: taskData.TicketID,
-			CollectedFields: map[string]string{
-				"Summary":      taskData.Summary,
-				"Analysis":     "Analysis completed",
-				"Suggestion":   "Please review this ticket",
-				"RiskLevel":    "Medium",
-				"Priority":     taskData.Metadata["priority"],
-				"Description":  taskData.Metadata["description"],
-			},
-		}
-	}
+	// Label for processing the extracted result
+ProcessResult:
 
 	log.Printf("Successfully processed InfoGatheredTask for ticket %s", infoTask.TicketID)
 

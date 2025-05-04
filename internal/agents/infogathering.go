@@ -276,117 +276,14 @@ func (a *InformationGatheringAgent) extractTaskData(message protocol.Message, ta
 					}
 				}
 				
-				// If all else fails, create a minimal task with whatever we have
-				task.TicketID = "UNKNOWN-TICKET"
-				task.Summary = "Data received but format unknown"
-				task.Metadata = map[string]string{
-					"raw_data": fmt.Sprintf("%v", dataPart.Data),
-				}
-				log.Printf("Created minimal task from unrecognized data format")
-				return nil
+							// No fallback, just return an error
+				return fmt.Errorf("failed to parse data part")
 			}
-		}
-
-		// Fallback: Check if it's a TextPart
-		textPart, ok := part.(*protocol.TextPart)
-		if ok && textPart != nil && textPart.Text != "" {
-			log.Printf("Processing TextPart")
-
-			// Try direct unmarshal
-			if err := json.Unmarshal([]byte(textPart.Text), task); err == nil {
-				// Ensure we have at least some values
-				if task.TicketID == "" {
-					task.TicketID = "UNKNOWN-TICKET"
-				}
-				if task.Summary == "" {
-					task.Summary = "No summary available"
-				}
-				if task.Metadata == nil {
-					task.Metadata = make(map[string]string)
-				}
-				log.Printf("Parsed task from TextPart: %s - %s", task.TicketID, task.Summary)
-				return nil
-			}
-
-			// If direct unmarshal fails, create a minimal task with the text content
-			task.TicketID = "UNKNOWN-TICKET"
-			task.Summary = "Text data received"
-			task.Metadata = map[string]string{
-				"raw_text": textPart.Text,
-			}
-			log.Printf("Created minimal task from text data")
-			return nil
 		}
 	}
 
-	// Special case handling for the specific structure we're seeing in the logs
-	// This is a last resort fallback that directly extracts data from the raw message
-	if len(message.Parts) > 0 {
-		// Try to extract data directly from the raw message structure
-		msgBytes, _ := json.Marshal(message)
-		msgStr := string(msgBytes)
-		log.Printf("Attempting direct extraction from raw message")
-		
-		// Parse the raw message to extract the data
-		var rawMsg map[string]interface{}
-		if err := json.Unmarshal(msgBytes, &rawMsg); err == nil {
-			if parts, ok := rawMsg["parts"].([]interface{}); ok && len(parts) > 0 {
-				for _, p := range parts {
-					part, ok := p.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					
-					// Check if this is a data part
-					if partType, ok := part["type"].(string); ok && partType == "data" {
-						// Extract the data field
-						if data, ok := part["data"].(map[string]interface{}); ok {
-							// Try to get ticketId and summary
-							if ticketID, ok := data["ticketId"].(string); ok {
-								task.TicketID = ticketID
-							} else {
-								task.TicketID = "UNKNOWN-TICKET"
-							}
-							
-							if summary, ok := data["summary"].(string); ok {
-								task.Summary = summary
-							} else {
-								task.Summary = "No summary available"
-							}
-							
-							// Extract metadata
-							task.Metadata = make(map[string]string)
-							if metadata, ok := data["metadata"].(map[string]interface{}); ok {
-								for k, v := range metadata {
-									if strVal, ok := v.(string); ok {
-										task.Metadata[k] = strVal
-									} else {
-										task.Metadata[k] = fmt.Sprintf("%v", v)
-									}
-								}
-							}
-							
-							log.Printf("Successfully extracted data directly from raw message: %s - %s", task.TicketID, task.Summary)
-							return nil
-						}
-					}
-				}
-			}
-		}
-		
-		// If all else fails, create a minimal task
-		task.TicketID = "UNKNOWN-TICKET"
-		task.Summary = "Message received but format not recognized"
-		task.Metadata = map[string]string{
-			"message_parts_count": fmt.Sprintf("%d", len(message.Parts)),
-			"raw_message": msgStr,
-		}
-		log.Printf("Created minimal task from unrecognized message format")
-		return nil
-	}
-
-	// This should never happen as we check for empty parts at the beginning
-	return fmt.Errorf("message has no parts")
+	// No fallback mechanisms - return an error if we couldn't extract the task data
+	return fmt.Errorf("failed to extract task data from message parts")
 }
 
 // AnalysisResult represents the analysis of a ticket
@@ -409,7 +306,7 @@ type AnalysisResult struct {
 // analyzeTicketInfo analyzes the ticket information and produces insights
 // This would normally integrate with an LLM for deeper analysis
 func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailableTask) *AnalysisResult {
-	// Try LLM analysis first if available
+	// Use LLM analysis if available, otherwise use basic analysis
 	if a.llmClient != nil {
 		llmResult, err := a.analyzeWithLLM(task)
 		if err == nil {
@@ -417,10 +314,22 @@ func (a *InformationGatheringAgent) analyzeTicketInfo(task *models.TicketAvailab
 			return llmResult
 		}
 		
-		log.Printf("LLM analysis failed: %v, falling back to basic analysis", err)
+		// If LLM analysis fails, return the error instead of falling back
+		return &AnalysisResult{
+			KeyThemes:        []string{"error"},
+			RiskLevel:        "unknown",
+			Priority:         "unknown",
+			Suggestion:       "LLM analysis failed",
+			Requirements:     []string{"Fix LLM integration"},
+			LLMUsed:          false,
+			Confidence:       0.0,
+			TechnicalAnalysis: fmt.Sprintf("LLM analysis error: %v", err),
+			BusinessImpact:   "Unable to determine due to LLM error",
+			NextSteps:        "Check LLM configuration and try again",
+		}
 	}
 	
-	// Fallback to basic analysis if LLM is not available or fails
+	// Use basic analysis if LLM is not available
 	return a.performBasicAnalysis(task)
 }
 
