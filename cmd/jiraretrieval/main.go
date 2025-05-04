@@ -47,9 +47,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Start the server and handle shutdown
-	if err := agent.StartServer(ctx); err != nil {
-		log.Fatalf("Server error: %v", err)
+	// Setup A2A server for responses from InformationGatheringAgent
+	if err := agent.SetupA2AServer(); err != nil {
+		log.Fatalf("Failed to setup A2A server: %v", err)
+	}
+	// Setup HTTP server for Jira webhooks
+	agent.SetupHTTPServer()
+
+	// Start both servers concurrently
+	go func() {
+		if err := agent.StartA2AServer(ctx); err != nil {
+			log.Fatalf("A2A server error: %v", err)
+		}
+	}()
+	if err := agent.StartHTTPServer(); err != nil {
+		log.Fatalf("HTTP server error: %v", err)
 	}
 
 	log.Println("Server shutdown complete")

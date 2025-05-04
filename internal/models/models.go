@@ -25,3 +25,30 @@ type InfoGatheredTask struct {
 	AnalysisResult map[string]string `json:"analysisResult"` // Structured analysis from LLM or rules
 	Summary        string            `json:"summary"`        // Human-readable summary
 }
+
+// JiraTicket represents a Jira issue fetched from Jira API
+type JiraTicket struct {
+	ID          string                 `json:"id"`
+	Key         string                 `json:"key"`
+	Summary     string                 `json:"summary"`
+	Description string                 `json:"description"`
+	Fields      map[string]interface{} `json:"fields"`
+	Links       []JiraLink             `json:"links"`
+	DueDate     string                 `json:"dueDate,omitempty"`
+}
+
+// JiraLink represents a Jira issue link
+type JiraLink struct {
+	Type         string `json:"type"`
+	InwardIssue  string `json:"inwardIssue,omitempty"`
+	OutwardIssue string `json:"outwardIssue,omitempty"`
+}
+
+// JiraComment represents a comment posted to Jira
+type JiraComment struct {
+	ID      string `json:"id"`
+	Body    string `json:"body"`
+	Created string `json:"created"`
+	Author  string `json:"author,omitempty"`
+	URL     string `json:"url,omitempty"`
+}
