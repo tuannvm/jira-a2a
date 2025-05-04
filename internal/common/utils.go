@@ -13,6 +13,11 @@ func StringPtr(s string) *string {
 	return &s
 }
 
+// BoolPtr returns a pointer to the given bool
+func BoolPtr(b bool) *bool {
+	return &b
+}
+
 // ExtractJSON extracts JSON content from a text string
 // It looks for content between { and } or [ and ] brackets
 func ExtractJSON(text string) (string, error) {

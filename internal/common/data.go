@@ -134,11 +134,17 @@ func ExtractInfoGatheredTask(message *protocol.Message, task *models.InfoGathere
 
 	// Try to extract from each part
 	for _, part := range message.Parts {
-		// Check if it's a DataPart
-		dataPart, ok := part.(*protocol.DataPart)
-		if ok && dataPart != nil && dataPart.Data != nil {
+		// Check if it's a DataPart (pointer or value)
+		var dp *protocol.DataPart
+		switch v := part.(type) {
+		case *protocol.DataPart:
+			dp = v
+		case protocol.DataPart:
+			dp = &v
+		}
+		if dp != nil && dp.Data != nil {
 			// Try to convert the data to InfoGatheredTask
-			dataBytes, err := json.Marshal(dataPart.Data)
+			dataBytes, err := json.Marshal(dp.Data)
 			if err == nil {
 				if err := json.Unmarshal(dataBytes, task); err == nil {
 					if task.TicketID != "" {

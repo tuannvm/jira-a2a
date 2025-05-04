@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tuannvm/jira-a2a/internal/common"
 	"github.com/tuannvm/jira-a2a/internal/config"
@@ -90,6 +91,12 @@ func (a *InformationGatheringAgent) StartAgentServer(ctx context.Context) error 
 func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, message protocol.Message, handle taskmanager.TaskHandle) error {
 	log.Infof("InformationGatheringAgent received task %s", taskID)
 
+	// Initial status update
+	initMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("Processing ticket information...")})
+	if err := handle.UpdateStatus(protocol.TaskStateWorking, &initMsg); err != nil {
+		log.Warnf("Failed to send initial status for task %s: %v", taskID, err)
+	}
+
 	// 1. Extract TicketAvailableTask from the message
 	var ticketTask models.TicketAvailableTask
 	// Use the specific function for extracting TicketAvailableTask
@@ -134,7 +141,6 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 
 	// 5. Create the result message with InfoGatheredTask payload
 	resultMessage := protocol.Message{
-		Role: protocol.MessageRoleAgent,
 		Parts: []protocol.Part{
 			&protocol.DataPart{
 				Type: protocol.PartTypeData,
@@ -143,16 +149,28 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 		},
 	}
 
-	// 6. Send InfoGatheredTask as an artifact
+	// 6. Send InfoGatheredTask as artifact with metadata
 	log.Infof("Adding artifact for task %s", taskID)
 	last := true
 	artifact := protocol.Artifact{
-		Parts:     resultMessage.Parts,
-		LastChunk: &last,
+		Name:        common.StringPtr("InfoGatheredTask"),
+		Description: common.StringPtr("Generated summary and analysis"),
+		Index:       0,
+		Parts:       resultMessage.Parts,
+		Append:      common.BoolPtr(false),
+		LastChunk:   &last,
 	}
 	if err := handle.AddArtifact(artifact); err != nil {
 		log.Errorf("AddArtifact failed for task %s: %v", taskID, err)
 		return fmt.Errorf("failed to add artifact for task %s: %w", taskID, err)
+	}
+	// Allow time for artifact to be delivered before closing subscription
+	time.Sleep(100 * time.Millisecond)
+
+	// Final status completion
+	completeMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("Completed ticket analysis.")})
+	if err := handle.UpdateStatus(protocol.TaskStateCompleted, &completeMsg); err != nil {
+		log.Warnf("Failed to send completion status for task %s: %v", taskID, err)
 	}
 
 	return nil

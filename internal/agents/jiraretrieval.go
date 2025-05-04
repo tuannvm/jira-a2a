@@ -149,58 +149,34 @@ func (j *JiraRetrievalAgent) ProcessWebhook(ctx context.Context, webReq *jira.We
 	}})
 	log.Infof("Sending TicketAvailableTask for ticket %s to InformationGatheringAgent", ticket.Key)
 	log.Infof("A2A client target = %s", j.infoAgentClient)
-	// Create cancellable context for SSE subscription
-	sendCtx, cancel := context.WithCancel(context.Background())
-	// Generate a single task ID
+	// Kick off event handling in background
 	taskID := uuid.New().String()
-	log.Infof("Starting SSE subscription for ticket %s (Task ID: %s)", ticket.Key, taskID)
 	params := protocol.SendTaskParams{ID: taskID, Message: msg}
-	events, err := j.infoAgentClient.StreamTask(sendCtx, params)
-	if err != nil {
-		log.Errorf("Failed to subscribe TicketAvailableTask for ticket %s: %v", ticket.Key, err)
-		return fmt.Errorf("failed to subscribe task: %w", err)
-	}
-	log.Infof("StreamTask returned event channel for ticket %s", ticket.Key)
-	// Handle events asynchronously: look for InfoGatheredTask artifact and post back to Jira
-	go func(key string, evCh <-chan protocol.TaskEvent) {
-		defer cancel()
-		log.Infof("Awaiting A2A events for ticket %s", key)
-		for ev := range evCh {
-			// Ultra-verbose logging: log the raw event
-			log.Infof("[DEBUG] RAW SSE EVENT for ticket %s: %#v", key, ev)
-			if ev == nil {
-				log.Warnf("[DEBUG] Received nil event for ticket %s", key)
-				continue
-			}
-			log.Infof("Received SSE event: %T %+v", ev, ev)
-			switch e := ev.(type) {
-			case protocol.TaskArtifactUpdateEvent:
-				log.Infof("ArtifactUpdateEvent received for ticket %s: %+v", key, e.Artifact)
-				msg := protocol.Message{Parts: e.Artifact.Parts}
-				var infoTask models.InfoGatheredTask
-				if err := common.ExtractInfoGatheredTask(&msg, &infoTask); err != nil {
-					log.Errorf("Failed to extract InfoGatheredTask for task %s: %v", key, err)
-					continue
-				}
-				commentText := j.formatJiraComment(&infoTask)
-				log.Infof("Posting comment to Jira API for ticket %s", infoTask.TicketID)
-				if cmt, err := j.jiraClient.PostComment(infoTask.TicketID, commentText); err != nil {
-					log.Errorf("Failed to post comment for ticket %s: %v", infoTask.TicketID, err)
-				} else {
-					log.Infof("Successfully posted comment for ticket %s (URL: %s)", infoTask.TicketID, cmt.URL)
-				}
-				if e.Final {
-					log.Infof("Final artifact for ticket %s, ending SSE subscription", key)
-					return
-				}
-			default:
-				log.Debugf("Ignoring event %T for ticket %s", ev, key)
-			}
-		}
-		log.Infof("SSE event channel closed for ticket %s (no more events)", key)
-	}(ticket.Key, events)
+	go j.handleTicketEvents(ticket.Key, params)
 	log.Infof("Subscribed to TicketAvailableTask for ticket %s (Task ID: %s)", ticket.Key, taskID)
 	return nil
+}
+
+func (j *JiraRetrievalAgent) handleTicketEvents(key string, params protocol.SendTaskParams) {
+	// Direct JSON-RPC call to InformationGatheringAgent; all artifacts returned in one shot
+	log.Infof("Invoking JSON-RPC SendTasks for ticket %s (Task ID: %s)", key, params.ID)
+	respMsg, err := common.SendTask(context.Background(), j.infoAgentClient, params)
+	if err != nil {
+		log.Errorf("SendTask RPC failed for ticket %s: %v", key, err)
+		return
+	}
+	var infoTask models.InfoGatheredTask
+	if err := common.ExtractInfoGatheredTask(&respMsg, &infoTask); err != nil {
+		log.Errorf("Failed to extract InfoGatheredTask for ticket %s: %v", key, err)
+		return
+	}
+	commentText := j.formatJiraComment(&infoTask)
+	log.Infof("Posting Jira comment for ticket %s", infoTask.TicketID)
+	if cmt, err := j.jiraClient.PostComment(infoTask.TicketID, commentText); err != nil {
+		log.Errorf("Failed to post Jira comment for ticket %s: %v", infoTask.TicketID, err)
+	} else {
+		log.Infof("Successfully posted Jira comment for ticket %s (URL: %s)", infoTask.TicketID, cmt.URL)
+	}
 }
 
 // Process handles responses (InfoGatheredTask) from InformationGatheringAgent.
@@ -224,8 +200,9 @@ func (j *JiraRetrievalAgent) Process(ctx context.Context, taskID string, msg pro
 		log.Infof("Successfully posted comment to Jira API for ticket %s (URL: %s)", infoTask.TicketID, cmt.URL)
 	}
 
-	response := protocol.NewTextPart(fmt.Sprintf("Comment posted for ticket %s", infoTask.TicketID))
-	if err := handle.UpdateStatus(protocol.TaskState("completed"), &protocol.Message{Parts: []protocol.Part{response}}); err != nil {
+	// Send final completion status
+	completeMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{&protocol.TextPart{Text: fmt.Sprintf("Comment posted for ticket %s", infoTask.TicketID)}})
+	if err := handle.UpdateStatus(protocol.TaskStateCompleted, &completeMsg); err != nil {
 		return err
 	}
 	return nil

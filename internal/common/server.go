@@ -53,6 +53,13 @@ func SetupServer(opts SetupServerOptions) (*server.A2AServer, error) {
 
 	// Setup server options
 	serverOpts := []server.Option{}
+	// Enable JSON-RPC at root so A2AClient.SendTasks will POST to "/"
+	serverOpts = append(serverOpts, server.WithJSONRPCEndpoint("/"))
+	// Increase read/write timeouts for long-running JSON-RPC tasks
+	serverOpts = append(serverOpts,
+		server.WithReadTimeout(2*time.Minute),
+		server.WithWriteTimeout(2*time.Minute),
+	)
 
 	// Add authentication if configured
 	if opts.AuthType != "" {
