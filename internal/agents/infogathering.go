@@ -133,27 +133,35 @@ func (a *InformationGatheringAgent) Process(ctx context.Context, taskID string, 
 
 	// 5. Create the result message
 	resultMessage := protocol.Message{
+		Role: protocol.MessageRoleAgent,
 		Parts: []protocol.Part{
 			&protocol.DataPart{
-				Type: "data",
+				Type: protocol.PartTypeData,
 				Data: infoGatheredTask,
-				Metadata: map[string]interface{}{
-					"content-type": "application/json",
-				},
 			},
 		},
 	}
+	// Debug: log created task and message payloads
+	log.Infof("InfoGatheredTask struct: %+v", infoGatheredTask)
+	log.Infof("ResultMessage struct: %+v", resultMessage)
 
-	// 6. Update task status to completed with the result message
-	log.Infof("Completing task %s with InfoGatheredTask for ticket %s", taskID, ticketTask.TicketID)
-	if err := handle.UpdateStatus(protocol.TaskStateCompleted, &protocol.Message{
-		Parts: []protocol.Part{resultMessage.Parts[0]},
-	}); err != nil {
-		errMsg := fmt.Sprintf("failed to update status for task %s: %v", taskID, err)
-		log.Errorf(errMsg)
-		return fmt.Errorf(errMsg)
+	// 6. Send the InfoGatheredTask artifact as a final chunk
+	log.Infof("Adding final artifact for task %s", taskID)
+	last := true
+	artifact := protocol.Artifact{
+		Parts:     resultMessage.Parts,
+		LastChunk: &last,
 	}
-	// 7. Return nil to indicate successful processing
+	if err := handle.AddArtifact(artifact); err != nil {
+		log.Errorf("AddArtifact failed for task %s: %v", taskID, err)
+		return fmt.Errorf("failed to add artifact for task %s: %w", taskID, err)
+	}
+	// 7. Mark task as completed without payload
+	log.Infof("Marking task %s as completed", taskID)
+	if err := handle.UpdateStatus(protocol.TaskStateCompleted, nil); err != nil {
+		log.Errorf("UpdateStatus failed for task %s: %v", taskID, err)
+		return fmt.Errorf("failed to update status for task %s: %w", taskID, err)
+	}
 	return nil
 }
 

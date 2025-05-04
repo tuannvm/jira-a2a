@@ -4,6 +4,7 @@ go 1.24.2
 
 require (
 	github.com/ctreminiom/go-atlassian/v2 v2.3.1
+	github.com/google/uuid v1.6.0
 	github.com/spf13/viper v1.20.1
 	github.com/tmc/langchaingo v0.1.13
 	trpc.group/trpc-go/trpc-a2a-go v0.0.2
@@ -18,7 +19,6 @@ require (
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.2 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
 	github.com/lestrrat-go/httprc v1.0.6 // indirect
