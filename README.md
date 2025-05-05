@@ -1,14 +1,19 @@
-# Jira A2A System Documentation
-
+# Jira A2A Proof of Concept
+[![Build Status](https://github.com/tuannvm/jira-a2a/actions/workflows/build.yml/badge.svg)](https://github.com/tuannvm/jira-a2a/actions/workflows/build.yml)
+[![GoDoc](https://pkg.go.dev/badge/github.com/tuannvm/jira-a2a)](https://pkg.go.dev/github.com/tuannvm/jira-a2a)
+[![Coverage Status](https://coveralls.io/repos/github/tuannvm/jira-a2a/badge.svg?branch=main)](https://coveralls.io/github/tuannvm/jira-a2a?branch=main)
 ## Overview
 
-The Jira A2A system is a DevOps workflow automation platform using the tRPC-A2A-Go framework. It consists of independent Go agents that communicate via A2A messages, each implementing the standard TaskProcessor interface.
+The Jira A2A system is a DevOps workflow automation platform using the [tRPC-A2A-Go framework](https://github.com/trpc-group/trpc-go/tree/main/trpc-a2a-go). It consists of independent Go agents that communicate via A2A messages, each implementing the standard TaskProcessor interface.
 
-The system automates development workflows by:
-1. Monitoring Jira tickets through webhooks
-2. Analyzing ticket information with AI assistance
-3. Generating code implementations for tickets (planned)
-4. Creating GitHub pull requests with implemented solutions (planned)
+### Agent-to-Agent (A2A) Communication
+
+Agent-to-Agent (A2A) is a decentralized messaging pattern where independent services (agents) exchange strongly-typed tasks and results over a transport layer—in this case, gRPC—without tight coupling or shared state. Each agent publishes and subscribes to tasks using the [trpc-a2a-go](https://pkg.go.dev/trpc.group/trpc-go/trpc-a2a-go) library, which:
+- Defines a common TaskProcessor interface for sending and handling tasks.
+- Serializes tasks as protobuf messages and transports them over gRPC.
+- Handles routing, retry, and backoff transparently between agents.
+
+For more details, see the official [trpc-a2a-go GitHub repo](https://github.com/trpc-group/trpc-go/tree/main/trpc-a2a-go) and its [pkg.go.dev documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-a2a-go).
 
 ## System Architecture
 
@@ -59,6 +64,7 @@ sequenceDiagram
 - **InformationGatheringAgent**: Analyzes ticket information, integrates with LLM for intelligent analysis, generates insights and recommendations, and returns structured analysis results.
 - **CopilotAgent** (Planned): Receives implementation requirements, integrates with GitHub Copilot API, generates code, and creates pull requests.
 - **LLM Integration**: Provides AI-powered analysis, generates summaries and insights, identifies missing information, and recommends next actions.
+- **tRPC-A2A-Go Library**: Underlying agent-to-agent communication framework used by this system; see the [upstream repo](https://github.com/trpc-group/trpc-go/tree/main/trpc-a2a-go) for details.
 
 ## System Workflow
 
