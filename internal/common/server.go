@@ -3,11 +3,11 @@ package common
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 )
@@ -66,7 +66,7 @@ func SetupServer(opts SetupServerOptions) (*server.A2AServer, error) {
 		var authProvider auth.Provider
 		switch opts.AuthType {
 		case "jwt":
-			log.Printf("Configuring JWT authentication for %s", opts.AgentName)
+			log.Default.Infof("Configuring JWT authentication for %s", opts.AgentName)
 			authProvider = auth.NewJWTAuthProvider(
 				[]byte(opts.JWTSecret),
 				"", // audience (empty for any)
@@ -74,18 +74,18 @@ func SetupServer(opts SetupServerOptions) (*server.A2AServer, error) {
 				24*time.Hour,
 			)
 		case "apikey":
-			log.Printf("Configuring API key authentication for %s (API key length: %d)", opts.AgentName, len(opts.APIKey))
+			log.Default.Infof("Configuring API key authentication for %s (API key length: %d)", opts.AgentName, len(opts.APIKey))
 			apiKeys := map[string]string{
 				opts.APIKey: "user",
 			}
 			authProvider = auth.NewAPIKeyAuthProvider(apiKeys, "X-API-Key")
 		default:
-			log.Printf("Warning: Unsupported authentication type '%s'", opts.AuthType)
+			log.Default.Warnf("Unsupported authentication type '%s', skipping auth setup", opts.AuthType)
 			return nil, fmt.Errorf("unsupported auth type: %s", opts.AuthType)
 		}
 		serverOpts = append(serverOpts, server.WithAuthProvider(authProvider))
 	} else {
-		log.Printf("Warning: No authentication configured for %s", opts.AgentName)
+		log.Default.Warnf("No authentication configured for %s, running unauthenticated", opts.AgentName)
 	}
 
 	// Create the server
@@ -102,9 +102,9 @@ func StartServer(ctx context.Context, srv *server.A2AServer, host string, port i
 	// Start the server in a goroutine
 	addr := fmt.Sprintf("%s:%d", host, port)
 	go func() {
-		log.Printf("Starting A2A server on %s", addr)
+		log.Default.Infof("Starting A2A server on %s", addr)
 		if err := srv.Start(addr); err != nil {
-			log.Fatalf("Failed to start server: %v", err)
+			log.Default.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
@@ -116,7 +116,7 @@ func StartServer(ctx context.Context, srv *server.A2AServer, host string, port i
 	defer cancel()
 
 	// Shutdown the server
-	log.Printf("Shutting down server...")
+	log.Default.Infof("Shutting down server...")
 	if err := srv.Stop(shutdownCtx); err != nil {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}

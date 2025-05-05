@@ -3,8 +3,9 @@ package common
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
+	log "github.com/tuannvm/jira-a2a/internal/logging"
+
 
 	"github.com/tuannvm/jira-a2a/internal/models"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -27,46 +28,46 @@ func ExtractTicketData(message protocol.Message, task *models.TicketAvailableTas
 			dp = v
 		}
 		if dp != nil {
-			log.Printf("Found DataPart")
+			log.Infof("Found DataPart")
 			// Marshal Data field to raw JSON
 			raw, err := json.Marshal(dp.Data)
 			if err != nil {
-				log.Printf("Failed to marshal DataPart.Data: %v", err)
+				log.Infof("Failed to marshal DataPart.Data: %v", err)
 				continue
 			}
 			// Try direct unmarshal into struct
 			if err := json.Unmarshal(raw, task); err == nil && task.TicketID != "" && task.Summary != "" {
-				log.Printf("Successfully extracted task data from DataPart")
+				log.Infof("Successfully extracted task data from DataPart")
 				return nil
 			}
 			// Try as generic map
 			var dataMap map[string]interface{}
 			if err := json.Unmarshal(raw, &dataMap); err == nil {
-				log.Printf("Parsed DataPart as map with %d keys", len(dataMap))
+				log.Infof("Parsed DataPart as map with %d keys", len(dataMap))
 				if err := ExtractFromMap(dataMap, task); err == nil {
 					return nil
 				}
 			}
 		}
-		
+
 		// Try TextPart
 		if textPart, ok := part.(*protocol.TextPart); ok && textPart != nil {
-			log.Printf("Found TextPart with content: %s", textPart.Text)
-			
+			log.Infof("Found TextPart with content: %s", textPart.Text)
+
 			// Try to unmarshal the text as JSON
 			if err := json.Unmarshal([]byte(textPart.Text), task); err == nil {
 				// Validate required fields
 				if task.TicketID != "" && task.Summary != "" {
-					log.Printf("Successfully extracted task data from TextPart")
+					log.Infof("Successfully extracted task data from TextPart")
 					return nil
 				}
 			}
-			
+
 			// If direct unmarshal failed, try to parse as map
 			var dataMap map[string]interface{}
 			if err := json.Unmarshal([]byte(textPart.Text), &dataMap); err == nil {
-				log.Printf("Parsed TextPart as map with %d keys", len(dataMap))
-				
+				log.Infof("Parsed TextPart as map with %d keys", len(dataMap))
+
 				// Extract data from map
 				if err := ExtractFromMap(dataMap, task); err == nil {
 					return nil
@@ -85,44 +86,44 @@ func ExtractFromMap(data map[string]interface{}, task *models.TicketAvailableTas
 	for k := range data {
 		keys = append(keys, k)
 	}
-	log.Printf("Map contains keys: %s", strings.Join(keys, ", "))
-	
+	log.Infof("Map contains keys: %s", strings.Join(keys, ", "))
+
 	// Extract ticket ID
 	if ticketID, ok := GetStringValue(data, "ticketId", "ticket_id", "id"); ok {
 		task.TicketID = ticketID
 	} else {
 		return fmt.Errorf("no ticket ID found in data")
 	}
-	
+
 	// Extract summary
 	if summary, ok := GetStringValue(data, "summary", "title", "name"); ok {
 		task.Summary = summary
 	} else {
 		return fmt.Errorf("no summary found in data")
 	}
-	
+
 	// Extract description (optional)
 	if description, ok := GetStringValue(data, "description", "desc", "body"); ok {
 		task.Description = description
 	}
-	
+
 	// Extract metadata (optional)
 	if task.Metadata == nil {
 		task.Metadata = make(map[string]string)
 	}
-	
+
 	// Add common metadata fields if present
 	for _, field := range []string{"priority", "status", "assignee", "reporter", "type", "components"} {
 		if value, ok := GetStringValue(data, field); ok {
 			task.Metadata[field] = value
 		}
 	}
-	
+
 	// Check if we have the minimum required fields
 	if task.TicketID != "" && task.Summary != "" {
 		return nil
 	}
-	
+
 	return fmt.Errorf("missing required fields in data")
 }
 

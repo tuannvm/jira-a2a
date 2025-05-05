@@ -3,43 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	liblog "trpc.group/trpc-go/trpc-a2a-go/log"
+	log "github.com/tuannvm/jira-a2a/internal/logging"
 
 	"github.com/tuannvm/jira-a2a/internal/agents"
+
 	"github.com/tuannvm/jira-a2a/internal/config"
 )
 
 func main() {
-	// Override tRPC-A2A-Go internal logger to debug level
-	liblog.Default = zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
-				TimeKey:    "ts",
-				LevelKey:   "lvl",
-				MessageKey: "message",
-				CallerKey:  "caller",
-				EncodeLevel: zapcore.CapitalColorLevelEncoder,
-				EncodeTime:  zapcore.RFC3339TimeEncoder,
-				EncodeCaller: zapcore.ShortCallerEncoder,
-			}),
-			zapcore.AddSync(os.Stdout),
-			zap.NewAtomicLevelAt(zap.DebugLevel),
-		),
-		zap.AddCaller(),
-		zap.AddCallerSkip(1),
-	).Sugar()
-
-	// Force debug logging for tRPC-A2A
-	os.Setenv("TRPC_LOG_LEVEL", "debug")
-	os.Setenv("TRPC_LOG_TRACE", "1")
-
 	// Check command line arguments
 	if len(os.Args) > 1 && os.Args[1] == "client" {
 		// Run the client example
@@ -58,12 +33,12 @@ func main() {
 
 	// Set agent name for configuration
 	config.GetViper().Set("agent_name", config.InfoGatheringAgentName)
-	
+
 	// Create a new configuration
 	cfg := config.NewConfig()
-	
+
 	// Log the configuration
-	log.Printf("InformationGatheringAgent configured with port: %d", cfg.ServerPort)
+	log.Infof("InformationGatheringAgent configured with port: %d", cfg.ServerPort)
 
 	// Create a new InformationGatheringAgent
 	agent := agents.NewInformationGatheringAgent(cfg)
@@ -83,10 +58,10 @@ func main() {
 	}
 
 	// Start server
-	log.Printf("Starting InformationGatheringAgent server...")
+	log.Infof("Starting InformationGatheringAgent server...")
 	if err := agent.StartAgentServer(ctx); err != nil {
 		log.Fatalf("Failed to start agent server: %v", err)
 	}
 
-	log.Printf("InformationGatheringAgent server stopped gracefully")
+	log.Infof("InformationGatheringAgent server stopped gracefully")
 }

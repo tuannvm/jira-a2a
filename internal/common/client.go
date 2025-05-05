@@ -3,10 +3,10 @@ package common
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/tuannvm/jira-a2a/internal/config"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
@@ -19,19 +19,20 @@ func SetupA2AClient(cfg *config.Config, targetURL string) (*client.A2AClient, er
 	switch cfg.AuthType {
 	case "jwt":
 		// JWT authentication
-		log.Printf("Using JWT authentication for A2A client")
+		log.Infof("Using JWT authentication for A2A client")
 		a2aClient, err = client.NewA2AClient(targetURL)
 	case "apikey":
 		// API key authentication
-		log.Printf("Using API key authentication for A2A client (API key length: %d)", len(cfg.APIKey))
+		log.Infof("Using API key authentication for A2A client (key length=%d)", len(cfg.APIKey))
 		a2aClient, err = client.NewA2AClient(targetURL, client.WithAPIKeyAuth(cfg.APIKey, "X-API-Key"))
 	default:
 		// Default to no authentication
-		log.Printf("Warning: No authentication configured for A2A client")
+		log.Warn("No authentication configured for A2A client; using unauthenticated client")
 		a2aClient, err = client.NewA2AClient(targetURL)
 	}
 
 	if err != nil {
+		log.Errorf("Failed to create A2A client: %v", err)
 		return nil, fmt.Errorf("failed to create A2A client: %w", err)
 	}
 

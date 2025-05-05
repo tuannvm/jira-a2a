@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/openai"
+	log "github.com/tuannvm/jira-a2a/internal/logging"
 	"github.com/tuannvm/jira-a2a/internal/config"
 )
 
@@ -67,7 +67,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 
 	// Log the prompt for debugging
-	log.Printf("Sending prompt to LLM: %s", truncateForLogging(prompt))
+	log.Infof("Sending prompt to LLM: %s", truncateForLogging(prompt))
 
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -80,7 +80,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 
 	// Log the response for debugging
-	log.Printf("Received response from LLM: %s", truncateForLogging(completion))
+	log.Infof("Received response from LLM: %s", truncateForLogging(completion))
 
 	return completion, nil
 }

@@ -3,43 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	liblog "trpc.group/trpc-go/trpc-a2a-go/log"
+	log "github.com/tuannvm/jira-a2a/internal/logging"
 
 	"github.com/tuannvm/jira-a2a/internal/agents"
+
 	"github.com/tuannvm/jira-a2a/internal/config"
 )
 
 func main() {
-	// Override tRPC-A2A-Go internal logger to debug level
-	liblog.Default = zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
-				TimeKey:    "ts",
-				LevelKey:   "lvl",
-				MessageKey: "message",
-				CallerKey:  "caller",
-				EncodeLevel: zapcore.CapitalColorLevelEncoder,
-				EncodeTime:  zapcore.RFC3339TimeEncoder,
-				EncodeCaller: zapcore.ShortCallerEncoder,
-			}),
-			zapcore.AddSync(os.Stdout),
-			zap.NewAtomicLevelAt(zap.DebugLevel),
-		),
-		zap.AddCaller(),
-		zap.AddCallerSkip(1),
-	).Sugar()
-
-	// Force debug logging for tRPC-A2A
-	os.Setenv("TRPC_LOG_LEVEL", "debug")
-	os.Setenv("TRPC_LOG_TRACE", "1")
-
 	// Check command line arguments
 	if len(os.Args) > 1 && os.Args[1] == "client" {
 		// Run the client example
@@ -54,12 +29,12 @@ func main() {
 
 	// Set agent name for configuration
 	config.GetViper().Set("agent_name", config.JiraRetrievalAgentName)
-	
+
 	// Create a new configuration
 	cfg := config.NewConfig()
-	
+
 	// Log the configuration
-	log.Printf("JiraRetrievalAgent configured with port: %d", cfg.ServerPort)
+	log.Infof("JiraRetrievalAgent configured with port: %d", cfg.ServerPort)
 
 	// Create a new JiraRetrievalAgent
 	agent := agents.NewJiraRetrievalAgent(cfg)
@@ -91,5 +66,5 @@ func main() {
 		log.Fatalf("HTTP server error: %v", err)
 	}
 
-	log.Println("Server shutdown complete")
+	log.Infof("Server shutdown complete")
 }

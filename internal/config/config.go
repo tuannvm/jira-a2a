@@ -2,7 +2,8 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"github.com/tuannvm/jira-a2a/internal/logging"
+
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,21 +96,21 @@ func init() {
 		viperInstance.SetConfigFile(path)
 		err := viperInstance.ReadInConfig()
 		if err == nil {
-			log.Printf("Loaded configuration from %s file", path)
+			logging.Logger.Infof("Loaded configuration from %s file", path)
 			loaded = true
 			break
 		}
 	}
 	
 	if !loaded {
-		log.Println("No .env file found or error loading it. Using environment variables or defaults.")
+		logging.Logger.Infof("No .env file found or error loading it. Using environment variables or defaults.")
 	}
 	
 	// Map standard environment variables to our configuration keys
 	viperInstance.BindEnv("llm_api_key", "LLM_API_KEY", "OPENAI_API_KEY")
 	// Log if we're using the OPENAI_API_KEY
 	if os.Getenv("OPENAI_API_KEY") != "" && os.Getenv("LLM_API_KEY") == "" {
-		log.Println("Using OPENAI_API_KEY environment variable for LLM API key")
+		logging.Logger.Infof("Using OPENAI_API_KEY environment variable for LLM API key")
 	}
 	
 	// Set default values
@@ -175,7 +176,7 @@ func NewConfig() *Config {
 	}
 	
 	// Log the agent name and port for debugging
-	log.Printf("Configuring agent '%s' with default port: %d", agentName, defaultPort)
+	logging.Logger.Infof("Configuring agent '%s' with default port: %d", agentName, defaultPort)
 	
 	// Get the server port and host
 	port := viperInstance.GetInt("server_port")
@@ -192,7 +193,7 @@ func NewConfig() *Config {
 	// Unmarshal the configuration from viper
 	err := viperInstance.Unmarshal(config)
 	if err != nil {
-		log.Printf("Error unmarshaling configuration: %v", err)
+		logging.Logger.Infof("Error unmarshaling configuration: %v", err)
 	}
 	
 	// Log the configuration
@@ -203,27 +204,27 @@ func NewConfig() *Config {
 
 // logConfig logs the configuration values (excluding sensitive information)
 func logConfig(config *Config) {
-	log.Printf("Configuration loaded:")
-	log.Printf("  Agent: %s", config.AgentName)
-	log.Printf("  Server: %s:%d", config.ServerHost, config.ServerPort)
-	log.Printf("  Webhook Port: %d", config.WebhookPort)
-	log.Printf("  LLM Enabled: %v", config.LLMEnabled)
+	logging.Logger.Infof("Configuration loaded:")
+	logging.Logger.Infof("  Agent: %s", config.AgentName)
+	logging.Logger.Infof("  Server: %s:%d", config.ServerHost, config.ServerPort)
+	logging.Logger.Infof("  Webhook Port: %d", config.WebhookPort)
+	logging.Logger.Infof("  LLM Enabled: %v", config.LLMEnabled)
 	
 	// Log sensitive information as [REDACTED]
 	if config.JiraUsername != "" {
-		log.Printf("  Jira Username: [REDACTED]")
+		logging.Logger.Infof("  Jira Username: [REDACTED]")
 	}
 	if config.JiraAPIToken != "" {
-		log.Printf("  Jira API Token: [REDACTED]")
+		logging.Logger.Infof("  Jira API Token: [REDACTED]")
 	}
 	if config.JWTSecret != "" {
-		log.Printf("  JWT Secret: [REDACTED]")
+		logging.Logger.Infof("  JWT Secret: [REDACTED]")
 	}
 	if config.APIKey != "" {
-		log.Printf("  API Key: [REDACTED]")
+		logging.Logger.Infof("  API Key: [REDACTED]")
 	}
 	if config.LLMAPIKey != "" {
-		log.Printf("  LLM API Key: [REDACTED]")
+		logging.Logger.Infof("  LLM API Key: [REDACTED]")
 	}
 }
 

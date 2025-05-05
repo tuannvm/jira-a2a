@@ -3,7 +3,7 @@ package jira
 import (
 	"context"
 	"fmt"
-	"log"
+	log "github.com/tuannvm/jira-a2a/internal/logging"
 
 	v2 "github.com/ctreminiom/go-atlassian/v2/jira/v2"
 	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
@@ -52,7 +52,7 @@ func NewClient(cfg *config.Config) *Client {
 	// Initialize the Jira client
 	jiraClient, err := v2.New(nil, cfg.JiraBaseURL)
 	if err != nil {
-		log.Printf("Error initializing Jira client: %v", err)
+		log.Errorf("Error initializing Jira client: %v", err)
 		return &Client{
 			Config: cfg,
 			Ctx:    ctx,
@@ -77,9 +77,9 @@ func NewClient(cfg *config.Config) *Client {
 		if resp != nil {
 			statusCode = resp.StatusCode
 		}
-		log.Printf("Warning: Failed to verify Jira credentials: %v (Status: %d)", err, statusCode)
+		log.Warnf("Failed to verify Jira credentials: %v (Status: %d)", err, statusCode)
 	} else {
-		log.Printf("Successfully connected to Jira API at %s", cfg.JiraBaseURL)
+		log.Infof("Connected to Jira API at %s", cfg.JiraBaseURL)
 	}
 
 	return c
