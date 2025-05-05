@@ -102,7 +102,7 @@ func (j *JiraRetrievalAgent) handleWebhook(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	webReq, err := jira.TransformJiraWebhook(body)
 	if err != nil {
 		http.Error(w, "Invalid webhook payload", http.StatusBadRequest)
@@ -113,7 +113,7 @@ func (j *JiraRetrievalAgent) handleWebhook(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Webhook processed for ticket %s", webReq.TicketID)))
+	_, _ = fmt.Fprintf(w, "Webhook processed for ticket %s", webReq.TicketID)
 }
 
 // ProcessWebhook fetches ticket data and forwards it to InformationGatheringAgent.

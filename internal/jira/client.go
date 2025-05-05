@@ -172,12 +172,12 @@ func (c *Client) GetTicket(ticketID string) (*ClientJiraTicket, error) {
 		}
 	}
 
-	if issue.Fields.Labels != nil && len(issue.Fields.Labels) > 0 {
+	if len(issue.Fields.Labels) > 0 {
 		ticket.Fields["labels"] = issue.Fields.Labels
 	}
 
 	// Extract issue links if available
-	if issue.Fields.IssueLinks != nil && len(issue.Fields.IssueLinks) > 0 {
+	if len(issue.Fields.IssueLinks) > 0 {
 		for _, link := range issue.Fields.IssueLinks {
 			jiraLink := ClientJiraLink{
 				Type: link.Type.Name,

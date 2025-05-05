@@ -124,6 +124,11 @@ func StartServer(ctx context.Context, srv *server.A2AServer, host string, port i
 	return nil
 }
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const authInfoContextKey contextKey = "auth_info"
+
 // AuthMiddleware creates an HTTP middleware for authentication
 func AuthMiddleware(provider auth.Provider, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +140,7 @@ func AuthMiddleware(provider auth.Provider, next http.Handler) http.Handler {
 		}
 
 		// Store authentication info in the request context
-		ctx := context.WithValue(r.Context(), "auth_info", authInfo)
+		ctx := context.WithValue(r.Context(), authInfoContextKey, authInfo)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -107,7 +107,9 @@ func init() {
 	}
 	
 	// Map standard environment variables to our configuration keys
-	viperInstance.BindEnv("llm_api_key", "LLM_API_KEY", "OPENAI_API_KEY")
+	if err := viperInstance.BindEnv("llm_api_key", "LLM_API_KEY", "OPENAI_API_KEY"); err != nil {
+		logging.Logger.Warnf("Failed to bind env for llm_api_key: %v", err)
+	}
 	// Log if we're using the OPENAI_API_KEY
 	if os.Getenv("OPENAI_API_KEY") != "" && os.Getenv("LLM_API_KEY") == "" {
 		logging.Logger.Infof("Using OPENAI_API_KEY environment variable for LLM API key")

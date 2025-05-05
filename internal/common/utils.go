@@ -82,7 +82,7 @@ func ReturnJSONError(w http.ResponseWriter, statusCode int, message string) {
 	if err := json.NewEncoder(w).Encode(errorResponse); err != nil {
 		// If JSON encoding fails, fall back to plain text
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(fmt.Sprintf("Error: %s", message)))
+		_, _ = fmt.Fprintf(w, "Error: %s", message)
 	}
 }
 
