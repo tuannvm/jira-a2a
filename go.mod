@@ -3,7 +3,7 @@ module github.com/tuannvm/jira-a2a
 go 1.24.2
 
 require (
-	github.com/ctreminiom/go-atlassian/v2 v2.3.1
+	github.com/ctreminiom/go-atlassian/v2 v2.4.0
 	github.com/google/uuid v1.6.0
 	github.com/spf13/viper v1.20.1
 	github.com/tmc/langchaingo v0.1.13
@@ -12,7 +12,7 @@ require (
 )
 
 require (
-	dario.cat/mergo v1.0.1 // indirect
+	dario.cat/mergo v1.0.2 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
