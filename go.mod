@@ -8,7 +8,7 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/tmc/langchaingo v0.1.13
 	go.uber.org/zap v1.27.0
-	trpc.group/trpc-go/trpc-a2a-go v0.0.2
+	trpc.group/trpc-go/trpc-a2a-go v0.2.3
 )
 
 require (
