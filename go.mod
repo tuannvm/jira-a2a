@@ -1,18 +1,18 @@
 module github.com/tuannvm/jira-a2a
 
-go 1.24.2
+go 1.24.4
 
 require (
 	github.com/ctreminiom/go-atlassian/v2 v2.3.1
 	github.com/google/uuid v1.6.0
 	github.com/spf13/viper v1.20.1
-	github.com/tmc/langchaingo v0.1.13
+	github.com/tmc/langchaingo v0.1.14
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.0.2
 )
 
 require (
-	dario.cat/mergo v1.0.1 // indirect
+	dario.cat/mergo v1.0.2 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -39,9 +39,9 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/oauth2 v0.29.0 // indirect
-	golang.org/x/sys v0.32.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/oauth2 v0.30.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
